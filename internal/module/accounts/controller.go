@@ -1,6 +1,7 @@
 package accounts
 
 import (
+	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -44,17 +45,27 @@ func (c *Controller) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		Name                *string    `json:"name"`
+		Bank                *string    `json:"bank"`
+		Last4               *string    `json:"last4"`
 		OpeningBalancePaise *int64     `json:"opening_balance_paise"`
 		OpeningAt           *time.Time `json:"opening_at"`
 	}
 	if !httpx.Decode(w, r, &req) {
 		return
 	}
-	switch err := c.svc.Update(r.Context(), id, req.Name, req.OpeningBalancePaise, req.OpeningAt); err {
-	case nil:
+	blank := func(p *string) bool { return p != nil && strings.TrimSpace(*p) == "" }
+	if blank(req.Name) || blank(req.Bank) || (req.Last4 != nil && !last4Re.MatchString(*req.Last4)) {
+		httpx.Err(w, 400, "name and bank cannot be empty; last4 must be 4 digits")
+		return
+	}
+	err := c.svc.Update(r.Context(), id, Patch{req.Name, req.Bank, req.Last4, req.OpeningBalancePaise, req.OpeningAt})
+	switch {
+	case err == nil:
 		w.WriteHeader(204)
-	case mongo.ErrNoDocuments:
+	case err == mongo.ErrNoDocuments:
 		httpx.Err(w, 404, "account not found")
+	case mongo.IsDuplicateKeyError(err):
+		httpx.Err(w, 409, "another account already has this bank and last4")
 	default:
 		httpx.Err(w, 500, "could not update account")
 	}
@@ -67,4 +78,21 @@ func (c *Controller) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, 200, v)
+}
+
+func (c *Controller) Detail(w http.ResponseWriter, r *http.Request) {
+	id, ok := httpx.PathID(w, r)
+	if !ok {
+		return
+	}
+	d, err := c.svc.Detail(r.Context(), id, time.Now())
+	switch {
+	case err == mongo.ErrNoDocuments:
+		httpx.Err(w, 404, "account not found")
+	case err != nil:
+		log.Printf("account detail: %v", err)
+		httpx.Err(w, 500, "could not load the account")
+	default:
+		httpx.WriteJSON(w, 200, d)
+	}
 }

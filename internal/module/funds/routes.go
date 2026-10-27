@@ -82,6 +82,15 @@ func (c *Controller) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := c.svc.Update(r.Context(), id, in); err != nil {
+		if err == errNotFound {
+			httpx.Err(w, 404, err.Error())
+			return
+		}
+		if err != mongo.ErrNoDocuments {
+			log.Printf("update fund: %v", err)
+			httpx.Err(w, 502, "could not update fund: "+err.Error())
+			return
+		}
 		notFound(w, err)
 		return
 	}
@@ -116,6 +125,84 @@ func (c *Controller) RecordSip(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (c *Controller) Exit(w http.ResponseWriter, r *http.Request) {
+	id, ok := httpx.PathID(w, r)
+	if !ok {
+		return
+	}
+	var req ExitReq
+	if !httpx.Decode(w, r, &req) {
+		return
+	}
+	if msg := req.Validate(); msg != "" {
+		httpx.Err(w, 400, msg)
+		return
+	}
+	did, err := c.svc.Exit(r.Context(), id, req, time.Now())
+	switch {
+	case err != nil:
+		notFound(w, err)
+	case !did:
+		httpx.Err(w, 400, "fund already moved out")
+	default:
+		w.WriteHeader(204)
+	}
+}
+
+func (c *Controller) Reenter(w http.ResponseWriter, r *http.Request) {
+	id, ok := httpx.PathID(w, r)
+	if !ok {
+		return
+	}
+	did, err := c.svc.Reenter(r.Context(), id, time.Now())
+	switch {
+	case err != nil:
+		notFound(w, err)
+	case !did:
+		httpx.Err(w, 400, "fund is not moved out")
+	default:
+		w.WriteHeader(204)
+	}
+}
+
+func (c *Controller) SetGeniusSip(w http.ResponseWriter, r *http.Request) {
+	var g GeniusSip
+	if !httpx.Decode(w, r, &g) {
+		return
+	}
+	if msg := g.Validate(); msg != "" {
+		httpx.Err(w, 400, msg)
+		return
+	}
+	if err := c.svc.SetGeniusSip(r.Context(), &g); err != nil {
+		log.Printf("set genius sip: %v", err)
+		httpx.Err(w, 500, "could not save the Genius SIP")
+		return
+	}
+	w.WriteHeader(204)
+}
+
+func (c *Controller) ClearGeniusSip(w http.ResponseWriter, r *http.Request) {
+	if err := c.svc.SetGeniusSip(r.Context(), nil); err != nil {
+		httpx.Err(w, 500, "could not remove the Genius SIP")
+		return
+	}
+	w.WriteHeader(204)
+}
+
+func (c *Controller) RecordGeniusSip(w http.ResponseWriter, r *http.Request) {
+	did, err := c.svc.RecordGeniusSip(r.Context())
+	switch {
+	case err != nil:
+		log.Printf("record genius sip: %v", err)
+		httpx.Err(w, 500, "could not record the Genius SIP")
+	case !did:
+		httpx.Err(w, 400, "needs an active Genius SIP, a Genius fund, and a fetched NAV for each")
+	default:
+		w.WriteHeader(204)
+	}
+}
+
 func (c *Controller) Refresh(w http.ResponseWriter, r *http.Request) {
 	if err := c.svc.Refresh(r.Context()); err != nil {
 		httpx.Err(w, 500, "could not refresh NAVs")
@@ -132,5 +219,10 @@ func RegisterRoutes(mux *http.ServeMux, c *Controller, auth func(http.Handler) h
 	mux.Handle("POST /funds/refresh", h(c.Refresh))
 	mux.Handle("PUT /funds/{id}", h(c.Update))
 	mux.Handle("DELETE /funds/{id}", h(c.Delete))
+	mux.Handle("PUT /funds/genius/sip", h(c.SetGeniusSip))
+	mux.Handle("DELETE /funds/genius/sip", h(c.ClearGeniusSip))
+	mux.Handle("POST /funds/genius/sip", h(c.RecordGeniusSip))
 	mux.Handle("POST /funds/{id}/sip", h(c.RecordSip))
+	mux.Handle("POST /funds/{id}/exit", h(c.Exit))
+	mux.Handle("POST /funds/{id}/reenter", h(c.Reenter))
 }

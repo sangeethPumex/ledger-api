@@ -29,3 +29,17 @@ func DaysUntil(day int, now time.Time) int {
 	}
 	return int(next.Sub(today).Hours()/24 + 0.5)
 }
+
+// LastDay is the most recent date, today included, whose day-of-month is `day` (clamped to short months), at IST midnight.
+func LastDay(day int, now time.Time) time.Time {
+	now = now.In(Loc)
+	on := func(month int) time.Time {
+		last := time.Date(now.Year(), time.Month(month)+1, 0, 0, 0, 0, 0, Loc).Day()
+		return time.Date(now.Year(), time.Month(month), min(day, last), 0, 0, 0, 0, Loc)
+	}
+	d := on(int(now.Month()))
+	if d.After(Midnight(now)) {
+		d = on(int(now.Month()) - 1)
+	}
+	return d
+}

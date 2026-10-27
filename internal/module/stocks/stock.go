@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 
@@ -23,6 +24,10 @@ const (
 type Quote struct {
 	Symbol    string    `bson:"_id"`
 	Name      string    `bson:"name"` // company name; cached with the quote, not part of the holding
+	// Domain is the company website's host (ril.com), used to look up a logo. DomainTried is set once Yahoo was asked,
+	// so a symbol without a website is not re-asked on every refresh.
+	Domain      string `bson:"domain,omitempty"`
+	DomainTried bool   `bson:"domainTried,omitempty"`
 	Price     float64   `bson:"price"`
 	PrevClose float64   `bson:"prevClose"`
 	FetchedAt time.Time `bson:"fetchedAt"`
@@ -41,6 +46,7 @@ type Lot struct {
 	Quantity float64       `json:"quantity" bson:"quantity"`
 	BuyPrice float64       `json:"buyPrice" bson:"buyPrice"`
 	BuyDate  string        `json:"buyDate" bson:"buyDate"` // YYYY-MM-DD
+	Platform string        `json:"platform,omitempty" bson:"platform,omitempty"` // broker it was bought on: Groww, Motilal Oswal, Geojit...
 }
 
 type Input struct {
@@ -48,6 +54,7 @@ type Input struct {
 	Quantity float64 `json:"quantity"`
 	BuyPrice float64 `json:"buyPrice"`
 	BuyDate  string  `json:"buyDate"`
+	Platform string  `json:"platform"`
 }
 
 // The symbol goes into a URL path, so keep it to what Yahoo tickers actually use.
@@ -56,6 +63,7 @@ var symbolRe = regexp.MustCompile(`^[A-Z0-9&^-]{1,20}\.(NS|BO)$`)
 // Validate normalises the symbol and returns a message if the input is unusable.
 func (in *Input) Validate(now time.Time) string {
 	in.Symbol = strings.ToUpper(strings.TrimSpace(in.Symbol))
+	in.Platform = strings.TrimSpace(in.Platform)
 	d, err := time.Parse("2006-01-02", in.BuyDate)
 	switch {
 	case !symbolRe.MatchString(in.Symbol):
@@ -66,6 +74,8 @@ func (in *Input) Validate(now time.Time) string {
 		return "buy date must be YYYY-MM-DD"
 	case d.After(now.In(ist.Loc)):
 		return "buy date is in the future"
+	case utf8.RuneCountInString(in.Platform) > 40:
+		return "platform is too long"
 	}
 	return ""
 }
@@ -82,6 +92,7 @@ type LotView struct {
 type Position struct {
 	Symbol     string    `json:"symbol"`
 	Name       string    `json:"name,omitempty"`
+	Domain     string    `json:"domain,omitempty"`
 	Quantity   float64   `json:"quantity"`
 	AvgPrice   float64   `json:"avgPrice"`
 	Invested   float64   `json:"invested"`
@@ -145,7 +156,7 @@ func Compute(lots []Lot, quotes map[string]Quote, freshAt time.Time) Portfolio {
 		q, priced := quotes[p.Symbol]
 		priced = priced && q.Price > 0
 		if priced {
-			p.Name, p.Price, p.PrevClose, p.AsOf = q.Name, &q.Price, &q.PrevClose, q.FetchedAt
+			p.Name, p.Domain, p.Price, p.PrevClose, p.AsOf = q.Name, q.Domain, &q.Price, &q.PrevClose, q.FetchedAt
 			p.Value = p.Quantity * q.Price
 			if q.PrevClose > 0 {
 				p.DayChange = p.Quantity * (q.Price - q.PrevClose)

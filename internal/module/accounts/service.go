@@ -2,6 +2,7 @@ package accounts
 
 import (
 	"context"
+	"log"
 	"strings"
 	"time"
 
@@ -13,6 +14,8 @@ import (
 type Service struct {
 	col *mongo.Collection
 	txs *mongo.Collection // read for balances, link on create; owned by the transactions module
+	// read for the account page's linked SIPs; owned by the funds module
+	funds, fundSettings *mongo.Collection
 }
 
 func NewService(ctx context.Context, db *mongo.Database) (*Service, error) {
@@ -20,12 +23,37 @@ func NewService(ctx context.Context, db *mongo.Database) (*Service, error) {
 	_, err := col.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys: bson.D{{Key: "bank", Value: 1}, {Key: "last4", Value: 1}}, Options: options.Index().SetUnique(true),
 	})
-	return &Service{col: col, txs: db.Collection("transactions")}, err
+	if err == nil {
+		normalizeBanks(ctx, col)
+	}
+	return &Service{col: col, txs: db.Collection("transactions"), funds: db.Collection("funds"), fundSettings: db.Collection("fund_settings")}, err
+}
+
+// normalizeBanks strips a "••1234" slug from banks saved with one. Safe to repeat. An account whose clean name would
+// collide with another account on bank and last4 is left alone and logged.
+func normalizeBanks(ctx context.Context, col *mongo.Collection) {
+	cur, err := col.Find(ctx, bson.D{})
+	if err != nil {
+		log.Printf("normalize banks: %v", err)
+		return
+	}
+	var all []Account
+	if err := cur.All(ctx, &all); err != nil {
+		log.Printf("normalize banks: %v", err)
+		return
+	}
+	for _, a := range all {
+		if c := CleanBank(a.Bank); c != a.Bank {
+			if _, err := col.UpdateByID(ctx, a.ID, bson.M{"$set": bson.M{"bank": c}}); err != nil {
+				log.Printf("normalize bank %q: %v", a.Bank, err)
+			}
+		}
+	}
 }
 
 func (s *Service) Create(ctx context.Context, a Account) (*Account, error) {
 	a.ID, a.CreatedAt = bson.NewObjectID(), time.Now().UTC()
-	a.Name, a.Bank = strings.TrimSpace(a.Name), strings.TrimSpace(a.Bank)
+	a.Name, a.Bank = strings.TrimSpace(a.Name), CleanBank(a.Bank)
 	if a.OpeningAt.IsZero() {
 		a.OpeningAt = a.CreatedAt
 	}
@@ -39,17 +67,30 @@ func (s *Service) Create(ctx context.Context, a Account) (*Account, error) {
 	return &a, err
 }
 
-// Update changes the name and opening balance; bank and last4 stay fixed because transactions link on them.
-func (s *Service) Update(ctx context.Context, id bson.ObjectID, name *string, paise *int64, at *time.Time) error {
+// Patch holds the fields an account update may change; nil means leave as is.
+type Patch struct {
+	Name, Bank, Last4   *string
+	OpeningBalancePaise *int64
+	OpeningAt           *time.Time
+}
+
+// Update changes the given fields. Transactions already link by account id, so renaming the bank or last4 only affects how future SMS match.
+func (s *Service) Update(ctx context.Context, id bson.ObjectID, p Patch) error {
 	set := bson.M{}
-	if name != nil {
-		set["name"] = strings.TrimSpace(*name)
+	if p.Name != nil {
+		set["name"] = strings.TrimSpace(*p.Name)
 	}
-	if paise != nil {
-		set["opening_balance_paise"] = *paise
+	if p.Bank != nil {
+		set["bank"] = CleanBank(*p.Bank)
 	}
-	if at != nil {
-		set["opening_at"] = *at
+	if p.Last4 != nil {
+		set["last4"] = *p.Last4
+	}
+	if p.OpeningBalancePaise != nil {
+		set["opening_balance_paise"] = *p.OpeningBalancePaise
+	}
+	if p.OpeningAt != nil {
+		set["opening_at"] = *p.OpeningAt
 	}
 	r, err := s.col.UpdateByID(ctx, id, bson.M{"$set": set})
 	if err == nil && r.MatchedCount == 0 {
@@ -82,7 +123,9 @@ func (s *Service) Match(ctx context.Context, bank, last4 string) (*Account, erro
 	return nil, nil
 }
 
-// List returns accounts with balances. Direction decides the sign; older rows without it fall back to type.
+// List returns accounts with balances: opening balance plus every linked transaction that arrived after it, credits adding and debits taking away.
+// Arrival time (received_at) decides what counts, not the date in the SMS, which has no time of day and would drop same-day transactions.
+// Direction decides the sign; older rows without it fall back to type.
 func (s *Service) List(ctx context.Context) ([]View, error) {
 	cur, err := s.col.Find(ctx, bson.D{}, options.Find().SetSort(bson.D{{Key: "name", Value: 1}}))
 	if err != nil {
@@ -97,7 +140,7 @@ func (s *Service) List(ctx context.Context) ([]View, error) {
 	for i, a := range accs {
 		out[i] = View{Account: a, BalancePaise: a.OpeningBalancePaise}
 		c, err := s.txs.Aggregate(ctx, mongo.Pipeline{
-			{{Key: "$match", Value: bson.M{"account_id": a.ID, "occurred_at": bson.M{"$gte": a.OpeningAt}}}},
+			{{Key: "$match", Value: bson.M{"account_id": a.ID, "$expr": bson.M{"$gte": bson.A{bson.M{"$ifNull": bson.A{"$received_at", "$occurred_at"}}, a.OpeningAt}}}}},
 			{{Key: "$group", Value: bson.M{"_id": nil, "net": bson.M{"$sum": bson.M{"$switch": bson.M{
 				"branches": bson.A{
 					bson.M{"case": bson.M{"$eq": bson.A{"$direction", "credit"}}, "then": "$amount_paise"},

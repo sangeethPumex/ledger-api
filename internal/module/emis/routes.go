@@ -1,6 +1,7 @@
 package emis
 
 import (
+	"errors"
 	"log"
 	"net/http"
 	"strconv"
@@ -51,6 +52,10 @@ func (c *Controller) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	e, err := c.svc.Create(r.Context(), in)
+	if errors.Is(err, ErrNoCard) {
+		httpx.Err(w, 400, err.Error())
+		return
+	}
 	if err != nil {
 		httpx.Err(w, 500, "could not create EMI")
 		return
@@ -72,6 +77,10 @@ func (c *Controller) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := c.svc.Update(r.Context(), id, in); err != nil {
+		if errors.Is(err, ErrNoCard) {
+			httpx.Err(w, 400, err.Error())
+			return
+		}
 		notFound(w, err, "EMI")
 		return
 	}

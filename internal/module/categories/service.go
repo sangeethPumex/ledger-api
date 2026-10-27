@@ -27,6 +27,14 @@ func (s *Service) Create(ctx context.Context, name string) (*Category, error) {
 	return c, nil
 }
 
+func (s *Service) Rename(ctx context.Context, id bson.ObjectID, name string) error {
+	r, err := s.col.UpdateByID(ctx, id, bson.M{"$set": bson.M{"name": strings.TrimSpace(name)}})
+	if err == nil && r.MatchedCount == 0 {
+		return mongo.ErrNoDocuments
+	}
+	return err
+}
+
 func (s *Service) List(ctx context.Context) ([]Category, error) {
 	cur, err := s.col.Find(ctx, bson.D{}, options.Find().SetSort(bson.D{{Key: "name", Value: 1}}))
 	if err != nil {

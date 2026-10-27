@@ -59,7 +59,7 @@ func (s *Service) Portfolio(ctx context.Context, now time.Time) (*Portfolio, err
 		}
 		var need []string
 		for _, sym := range symbols {
-			if q, ok := quotes[sym]; !ok || q.Name == "" || q.FetchedAt.Before(fresh) {
+			if q, ok := quotes[sym]; !ok || q.Name == "" || !q.DomainTried || q.FetchedAt.Before(fresh) {
 				need = append(need, sym)
 			}
 		}
@@ -81,13 +81,13 @@ func (s *Service) Portfolio(ctx context.Context, now time.Time) (*Portfolio, err
 }
 
 func (s *Service) Create(ctx context.Context, in Input) (*Lot, error) {
-	l := &Lot{ID: bson.NewObjectID(), Symbol: in.Symbol, Quantity: in.Quantity, BuyPrice: in.BuyPrice, BuyDate: in.BuyDate}
+	l := &Lot{ID: bson.NewObjectID(), Symbol: in.Symbol, Quantity: in.Quantity, BuyPrice: in.BuyPrice, BuyDate: in.BuyDate, Platform: in.Platform}
 	_, err := s.col.InsertOne(ctx, l)
 	return l, err
 }
 
 func (s *Service) Update(ctx context.Context, id bson.ObjectID, in Input) error {
-	r, err := s.col.UpdateByID(ctx, id, bson.M{"$set": bson.M{"symbol": in.Symbol, "quantity": in.Quantity, "buyPrice": in.BuyPrice, "buyDate": in.BuyDate}})
+	r, err := s.col.UpdateByID(ctx, id, bson.M{"$set": bson.M{"symbol": in.Symbol, "quantity": in.Quantity, "buyPrice": in.BuyPrice, "buyDate": in.BuyDate, "platform": in.Platform}})
 	if err == nil && r.MatchedCount == 0 {
 		return mongo.ErrNoDocuments
 	}

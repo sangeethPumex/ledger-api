@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"ledger-backend/internal/httpx"
@@ -49,7 +50,16 @@ func (c *Controller) List(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = n
 	}
-	ts, err := c.svc.List(r.Context(), nr, limit)
+	var acc *bson.ObjectID
+	if q := r.URL.Query().Get("account_id"); q != "" {
+		id, err := bson.ObjectIDFromHex(q)
+		if err != nil {
+			httpx.Err(w, 400, "account_id is not a valid id")
+			return
+		}
+		acc = &id
+	}
+	ts, err := c.svc.List(r.Context(), nr, acc, limit)
 	if err != nil {
 		httpx.Err(w, 500, "could not list transactions")
 		return

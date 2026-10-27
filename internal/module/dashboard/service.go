@@ -211,7 +211,7 @@ func (s *Service) recent(ctx context.Context, r Range, n names, limit int64) ([]
 		}
 		src := n.source(d.AccountID, d.CardID)
 		if src == "" && d.Last4 != "" {
-			src = d.Bank + " ••" + d.Last4
+			src = d.Bank
 		}
 		credit := d.Direction == "credit" || (d.Direction == "" && (d.Type == "income" || d.Type == "refund"))
 		at := d.OccurredAt

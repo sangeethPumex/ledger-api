@@ -29,30 +29,32 @@ type Payment struct {
 // Emi is one obligation. Kind is loan, purchase or card. Balance (outstanding principal, amount left, or card balance) is optional:
 // without it the amount left is Amount x instalments left.
 type Emi struct {
-	ID       bson.ObjectID `json:"id" bson:"_id"`
-	Name     string        `json:"name" bson:"name"`
-	Kind     string        `json:"kind" bson:"kind"`
-	Amount   float64       `json:"amount" bson:"amount"`
-	DueDay   int           `json:"dueDay" bson:"dueDay"`
-	Total    int           `json:"total" bson:"total"`
-	Paid     int           `json:"paid" bson:"paid"`
-	Rate     *float64      `json:"rate,omitempty" bson:"rate,omitempty"`
-	Balance  *float64      `json:"balance,omitempty" bson:"balance,omitempty"`
-	Original *float64      `json:"original,omitempty" bson:"original,omitempty"`
-	Payments []Payment     `json:"payments,omitempty" bson:"payments,omitempty"`
+	ID       bson.ObjectID  `json:"id" bson:"_id"`
+	Name     string         `json:"name" bson:"name"`
+	Kind     string         `json:"kind" bson:"kind"`
+	Amount   float64        `json:"amount" bson:"amount"`
+	DueDay   int            `json:"dueDay" bson:"dueDay"`
+	Total    int            `json:"total" bson:"total"`
+	Paid     int            `json:"paid" bson:"paid"`
+	Rate     *float64       `json:"rate,omitempty" bson:"rate,omitempty"`
+	Balance  *float64       `json:"balance,omitempty" bson:"balance,omitempty"`
+	Original *float64       `json:"original,omitempty" bson:"original,omitempty"`
+	CardID   *bson.ObjectID `json:"cardId,omitempty" bson:"cardId,omitempty"` // the credit card this was converted from or charged to
+	Payments []Payment      `json:"payments,omitempty" bson:"payments,omitempty"`
 }
 
 // Input is what a client may set; payments change only through the payment routes.
 type Input struct {
-	Name     string   `json:"name"`
-	Kind     string   `json:"kind"`
-	Amount   float64  `json:"amount"`
-	DueDay   int      `json:"dueDay"`
-	Total    int      `json:"total"`
-	Paid     int      `json:"paid"`
-	Rate     *float64 `json:"rate"`
-	Balance  *float64 `json:"balance"`
-	Original *float64 `json:"original"`
+	Name     string         `json:"name"`
+	Kind     string         `json:"kind"`
+	Amount   float64        `json:"amount"`
+	DueDay   int            `json:"dueDay"`
+	Total    int            `json:"total"`
+	Paid     int            `json:"paid"`
+	Rate     *float64       `json:"rate"`
+	Balance  *float64       `json:"balance"`
+	Original *float64       `json:"original"`
+	CardID   *bson.ObjectID `json:"cardId"`
 }
 
 func bad(v ...float64) bool {
@@ -84,6 +86,8 @@ func (in *Input) Validate() string {
 		return "amount must be positive"
 	case in.DueDay < 1 || in.DueDay > 31:
 		return "dueDay must be 1-31"
+	case card && in.CardID != nil:
+		return "a card balance cannot be linked to another card"
 	case card && in.Balance == nil:
 		return "a card needs its current balance"
 	case !card && in.Total < 1:
@@ -183,6 +187,7 @@ func Impact(e *Emi, extra float64) (interestSaved float64, monthsSaved, monthsLe
 // View is an Emi with the figures the UI shows.
 type View struct {
 	Emi
+	CardName        string   `json:"cardName,omitempty"`
 	Active          bool     `json:"active"`
 	Left            float64  `json:"left"`
 	InstalmentsLeft int      `json:"instalmentsLeft"`

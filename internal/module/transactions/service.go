@@ -177,8 +177,11 @@ func (s *Service) resync(ctx context.Context) error {
 	return nil
 }
 
-func (s *Service) List(ctx context.Context, needsReview *bool, limit int64) ([]Transaction, error) {
+func (s *Service) List(ctx context.Context, needsReview *bool, accountID *bson.ObjectID, limit int64) ([]Transaction, error) {
 	filter := bson.M{}
+	if accountID != nil {
+		filter["account_id"] = *accountID
+	}
 	if needsReview != nil {
 		filter["needs_review"] = *needsReview
 	}

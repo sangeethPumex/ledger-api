@@ -25,6 +25,7 @@ var codeRe = regexp.MustCompile(`^\d{1,8}$`)
 
 type Service struct {
 	col  *mongo.Collection
+	set  *mongo.Collection // one-document settings, e.g. the Genius basket SIP
 	http *http.Client
 	mu   sync.Mutex
 	last time.Time // last background NAV refresh
@@ -32,7 +33,7 @@ type Service struct {
 
 func NewService(ctx context.Context, db *mongo.Database) (*Service, error) {
 	col := db.Collection(Collection)
-	return &Service{col: col, http: &http.Client{Timeout: 10 * time.Second}}, legacy.StringIDs(ctx, col)
+	return &Service{col: col, set: db.Collection("fund_settings"), http: &http.Client{Timeout: 10 * time.Second}}, legacy.StringIDs(ctx, col)
 }
 
 // Lookup is a scheme's identity and latest NAV from mfapi.in.
@@ -117,15 +118,36 @@ func (s *Service) Create(ctx context.Context, in Input) (*Fund, error) {
 		return nil, err
 	}
 	f := &Fund{ID: bson.NewObjectID(), Code: l.Code, Name: l.Name, FundHouse: l.FundHouse, Platform: strings.TrimSpace(in.Platform), AccountID: in.AccountID, Type: in.Type, Membership: in.Membership,
-		Units: in.Units, AvgNav: in.AvgNav, Invested: in.invested(), Nav: &l.Nav, NavDate: l.Date, Sip: in.Sip}
+		Units: in.Units, AvgNav: in.AvgNav, Invested: in.invested(), Nav: &l.Nav, NavDate: l.Date, Sip: in.Sip, JoinedAt: in.JoinedAt}
+	if f.JoinedAt == "" {
+		f.JoinedAt = ist.Midnight(time.Now()).Format("2006-01-02")
+	}
 	_, err = s.col.InsertOne(ctx, f)
 	return f, err
 }
 
-// Update changes the holding, platform, type, membership and SIP; code, name and NAV stay.
+// Update changes the holding, platform, type, membership and SIP. A different scheme code re-reads the registry,
+// so name, fund house and NAV follow the new code (errNotFound when there is no such scheme).
 func (s *Service) Update(ctx context.Context, id bson.ObjectID, in Input) error {
+	cur, err := s.get(ctx, id)
+	if err != nil {
+		return err
+	}
 	set := bson.M{"platform": strings.TrimSpace(in.Platform), "accountId": in.AccountID, "type": in.Type, "membership": in.Membership, "units": in.Units, "avgNav": in.AvgNav, "invested": in.invested()}
+	if in.Code != cur.Code {
+		l, err := s.Lookup(ctx, strconv.FormatInt(in.Code, 10))
+		if err != nil {
+			return err
+		}
+		set["code"], set["name"], set["fundHouse"], set["nav"], set["navDate"] = l.Code, l.Name, l.FundHouse, l.Nav, l.Date
+	}
+	if in.JoinedAt != "" {
+		set["joinedAt"] = in.JoinedAt
+	}
 	upd := bson.M{"$set": set}
+	if in.Membership == "Genius" {
+		in.Sip = nil // the basket SIP covers it
+	}
 	if in.Sip != nil {
 		set["sip"] = in.Sip
 	} else {
@@ -144,6 +166,94 @@ func (s *Service) Delete(ctx context.Context, id bson.ObjectID) error {
 		return mongo.ErrNoDocuments
 	}
 	return err
+}
+
+const geniusKey = "genius"
+
+// GeniusSip returns the basket SIP, nil when none is set.
+func (s *Service) GeniusSip(ctx context.Context) (*GeniusSip, error) {
+	var d struct {
+		Sip *GeniusSip `bson:"sip"`
+	}
+	err := s.set.FindOne(ctx, bson.M{"_id": geniusKey}).Decode(&d)
+	if err == mongo.ErrNoDocuments {
+		return nil, nil
+	}
+	return d.Sip, err
+}
+
+// SetGeniusSip stores the basket SIP; nil removes it.
+func (s *Service) SetGeniusSip(ctx context.Context, g *GeniusSip) error {
+	if g == nil {
+		_, err := s.set.UpdateByID(ctx, geniusKey, bson.M{"$unset": bson.M{"sip": ""}})
+		return err
+	}
+	_, err := s.set.UpdateByID(ctx, geniusKey, bson.M{"$set": bson.M{"sip": g}}, options.UpdateOne().SetUpsert(true))
+	return err
+}
+
+// RecordGeniusSip books one basket instalment across the active Genius funds. ok is false without a live SIP, a fund or a NAV.
+func (s *Service) RecordGeniusSip(ctx context.Context) (ok bool, err error) {
+	g, err := s.GeniusSip(ctx)
+	if err != nil || g == nil {
+		return false, err
+	}
+	all, err := s.all(ctx)
+	if err != nil {
+		return false, err
+	}
+	ptrs := make([]*Fund, len(all))
+	for i := range all {
+		ptrs[i] = &all[i]
+	}
+	if !AddGeniusSip(ptrs, &g.Sip) {
+		return false, nil
+	}
+	for _, f := range ptrs {
+		if f.Membership != "Genius" || f.Exited() {
+			continue
+		}
+		if _, err := s.col.ReplaceOne(ctx, bson.M{"_id": f.ID}, f); err != nil {
+			return true, err
+		}
+	}
+	return true, nil
+}
+
+// Exit moves a fund out of the portfolio (a Genius rebalance, or a full redemption). ok is false when it already left.
+func (s *Service) Exit(ctx context.Context, id bson.ObjectID, req ExitReq, now time.Time) (ok bool, err error) {
+	f, err := s.get(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	if f.Exited() {
+		return false, nil
+	}
+	date, proceeds := req.Date, Value(f)
+	if date == "" {
+		date = ist.Midnight(now).Format("2006-01-02")
+	}
+	if req.Proceeds != nil {
+		proceeds = *req.Proceeds
+	}
+	Exit(f, date, proceeds)
+	_, err = s.col.ReplaceOne(ctx, bson.M{"_id": id}, f)
+	return true, err
+}
+
+// Reenter puts an exited fund back. ok is false when it was never out.
+func (s *Service) Reenter(ctx context.Context, id bson.ObjectID, now time.Time) (ok bool, err error) {
+	f, err := s.get(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	if !f.Exited() {
+		return false, nil
+	}
+	Reenter(f)
+	f.JoinedAt = ist.Midnight(now).Format("2006-01-02")
+	_, err = s.col.ReplaceOne(ctx, bson.M{"_id": id}, f)
+	return true, err
 }
 
 // RecordSip books one instalment; ok is false when the fund has no SIP or no NAV yet.
@@ -167,6 +277,9 @@ func (s *Service) Refresh(ctx context.Context) error {
 	}
 	var wg sync.WaitGroup
 	for _, f := range fs {
+		if f.Exited() {
+			continue
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -230,13 +343,18 @@ type Summary struct {
 	ByPlatform []Slice    `json:"byPlatform"`
 	Sips       []SipBrief `json:"sips"`
 	NextSip    *NextSip   `json:"nextSip,omitempty"`
+	Realised   float64    `json:"realised"` // gain or loss booked on funds that were sold out
+	Exited     int        `json:"exited"`
+	Genius     Genius     `json:"genius"`
 }
 
 // Summary totals and splits every fund in one aggregation.
 func (s *Service) Summary(ctx context.Context, now time.Time) (*Summary, error) {
 	hasNav := bson.M{"$gt": bson.A{bson.M{"$ifNull": bson.A{"$nav", 0}}, 0}}
+	live := bson.M{"$match": bson.M{"status": bson.M{"$ne": "exited"}}} // exited funds stay out of every current figure
 	slice := func(key string) bson.A {
 		return bson.A{
+			live,
 			bson.M{"$group": bson.M{"_id": key, "value": bson.M{"$sum": "$_value"}}},
 			bson.M{"$sort": bson.M{"value": -1}},
 		}
@@ -244,13 +362,13 @@ func (s *Service) Summary(ctx context.Context, now time.Time) (*Summary, error) 
 	pipe := mongo.Pipeline{
 		{{Key: "$addFields", Value: bson.M{"_value": bson.M{"$cond": bson.A{hasNav, bson.M{"$multiply": bson.A{"$units", "$nav"}}, "$invested"}}}}},
 		{{Key: "$facet", Value: bson.M{
-			"totals": bson.A{bson.M{"$group": bson.M{
+			"totals": bson.A{live, bson.M{"$group": bson.M{
 				"_id": nil, "invested": bson.M{"$sum": "$invested"}, "value": bson.M{"$sum": "$_value"}, "count": bson.M{"$sum": 1},
-				"sip": bson.M{"$sum": bson.M{"$cond": bson.A{bson.M{"$in": bson.A{bson.M{"$ifNull": bson.A{"$sip.status", "active"}}, bson.A{"paused", "cancelled"}}}, 0, bson.M{"$ifNull": bson.A{"$sip.amount", 0}}}}}, "asOf": bson.M{"$max": "$navDate"},
+				"sip": bson.M{"$sum": bson.M{"$cond": bson.A{bson.M{"$or": bson.A{bson.M{"$eq": bson.A{"$membership", "Genius"}}, bson.M{"$in": bson.A{bson.M{"$ifNull": bson.A{"$sip.status", "active"}}, bson.A{"paused", "cancelled"}}}}}, 0, bson.M{"$ifNull": bson.A{"$sip.amount", 0}}}}}, "asOf": bson.M{"$max": "$navDate"},
 			}}},
 			"byType":     slice("$type"),
 			"byPlatform": slice("$platform"),
-			"sips": bson.A{bson.M{"$match": bson.M{"sip": bson.M{"$exists": true}, "sip.status": bson.M{"$nin": bson.A{"paused", "cancelled"}}}},
+			"sips": bson.A{bson.M{"$match": bson.M{"status": bson.M{"$ne": "exited"}, "membership": bson.M{"$ne": "Genius"}, "sip": bson.M{"$exists": true}, "sip.status": bson.M{"$nin": bson.A{"paused", "cancelled"}}}},
 				bson.M{"$project": bson.M{"_id": 0, "name": 1, "amount": "$sip.amount", "day": "$sip.day"}}},
 		}}},
 	}
@@ -274,6 +392,17 @@ func (s *Service) Summary(ctx context.Context, now time.Time) (*Summary, error) 
 		return nil, err
 	}
 	out := &Summary{ByType: []Slice{}, ByPlatform: []Slice{}, Sips: []SipBrief{}}
+	all, err := s.all(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out.Genius = GeniusOf(all, now)
+	for i := range all {
+		if all[i].Exited() {
+			out.Exited++
+			out.Realised += Value(&all[i]) - all[i].Invested
+		}
+	}
 	if len(res) == 0 {
 		return out, nil
 	}
@@ -285,6 +414,18 @@ func (s *Service) Summary(ctx context.Context, now time.Time) (*Summary, error) 
 		out.Pnl = out.Value - out.Invested
 	}
 	out.ByType, out.ByPlatform, out.Sips = append(out.ByType, res[0].ByType...), append(out.ByPlatform, res[0].ByPlatform...), append(out.Sips, res[0].Sips...)
+	// the Genius basket has one SIP of its own, counted once whatever the number of funds in it
+	if gs, err := s.GeniusSip(ctx); err != nil {
+		return nil, err
+	} else if gs != nil {
+		out.Genius.Sip = gs
+		if gs.Live() {
+			d := ist.DaysUntil(gs.Day, now)
+			out.Genius.SipInDays = &d
+			out.SipMonthly += gs.Amount
+			out.Sips = append(out.Sips, SipBrief{Name: "Genius basket", Amount: gs.Amount, Day: gs.Day})
+		}
+	}
 	sort.Slice(out.Sips, func(i, j int) bool { return ist.DaysUntil(out.Sips[i].Day, now) < ist.DaysUntil(out.Sips[j].Day, now) })
 	if len(out.Sips) > 0 {
 		a := out.Sips[0]

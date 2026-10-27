@@ -2,6 +2,7 @@ package emis
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"time"
 
@@ -13,11 +14,17 @@ import (
 	"ledger-backend/internal/legacy"
 )
 
-type Service struct{ col *mongo.Collection }
+// ErrNoCard is returned when an EMI is linked to a card that does not exist.
+var ErrNoCard = errors.New("linked card not found")
+
+type Service struct {
+	col   *mongo.Collection
+	cards *mongo.Collection // owned by the cards module (which imports this package, so no constant from there)
+}
 
 func NewService(ctx context.Context, db *mongo.Database) (*Service, error) {
 	col := db.Collection(Collection)
-	return &Service{col}, legacy.StringIDs(ctx, col)
+	return &Service{col: col, cards: db.Collection("credit_cards")}, legacy.StringIDs(ctx, col)
 }
 
 func (s *Service) get(ctx context.Context, id bson.ObjectID) (*Emi, error) {
@@ -39,15 +46,59 @@ func (s *Service) List(ctx context.Context, now time.Time) ([]View, error) {
 	if err := cur.All(ctx, &all); err != nil {
 		return nil, err
 	}
+	names := map[bson.ObjectID]string{}
+	for _, e := range all {
+		if e.CardID != nil {
+			names[*e.CardID] = ""
+		}
+	}
+	if len(names) > 0 {
+		ids := make([]bson.ObjectID, 0, len(names))
+		for id := range names {
+			ids = append(ids, id)
+		}
+		cc, err := s.cards.Find(ctx, bson.M{"_id": bson.M{"$in": ids}}, options.Find().SetProjection(bson.M{"name": 1}))
+		if err != nil {
+			return nil, err
+		}
+		var cs []struct {
+			ID   bson.ObjectID `bson:"_id"`
+			Name string        `bson:"name"`
+		}
+		if err := cc.All(ctx, &cs); err != nil {
+			return nil, err
+		}
+		for _, c := range cs {
+			names[c.ID] = c.Name
+		}
+	}
 	out := make([]View, len(all))
 	for i, e := range all {
 		out[i] = ViewOf(e, now)
+		if e.CardID != nil {
+			out[i].CardName = names[*e.CardID]
+		}
 	}
 	return out, nil
 }
 
+// checkCard fails with ErrNoCard when id names a card that is not there.
+func (s *Service) checkCard(ctx context.Context, id *bson.ObjectID) error {
+	if id == nil {
+		return nil
+	}
+	n, err := s.cards.CountDocuments(ctx, bson.M{"_id": *id})
+	if err == nil && n == 0 {
+		return ErrNoCard
+	}
+	return err
+}
+
 func (s *Service) Create(ctx context.Context, in Input) (*Emi, error) {
-	e := &Emi{ID: bson.NewObjectID(), Name: trim(in.Name), Kind: in.Kind, Amount: in.Amount, DueDay: in.DueDay, Total: in.Total, Paid: in.Paid, Rate: in.Rate, Balance: in.Balance, Original: in.Original}
+	if err := s.checkCard(ctx, in.CardID); err != nil {
+		return nil, err
+	}
+	e := &Emi{ID: bson.NewObjectID(), Name: trim(in.Name), Kind: in.Kind, Amount: in.Amount, DueDay: in.DueDay, Total: in.Total, Paid: in.Paid, Rate: in.Rate, Balance: in.Balance, Original: in.Original, CardID: in.CardID}
 	if e.Kind == "card" {
 		e.Total, e.Paid = 0, 0
 	}
@@ -57,12 +108,15 @@ func (s *Service) Create(ctx context.Context, in Input) (*Emi, error) {
 
 // Update replaces the definition and keeps the payment history.
 func (s *Service) Update(ctx context.Context, id bson.ObjectID, in Input) error {
+	if err := s.checkCard(ctx, in.CardID); err != nil {
+		return err
+	}
 	e, err := s.get(ctx, id)
 	if err != nil {
 		return err
 	}
 	e.Name, e.Kind, e.Amount, e.DueDay, e.Total, e.Paid = trim(in.Name), in.Kind, in.Amount, in.DueDay, in.Total, in.Paid
-	e.Rate, e.Balance, e.Original = in.Rate, in.Balance, in.Original
+	e.Rate, e.Balance, e.Original, e.CardID = in.Rate, in.Balance, in.Original, in.CardID
 	if e.Kind == "card" {
 		e.Total, e.Paid = 0, 0
 	}

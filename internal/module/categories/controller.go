@@ -43,3 +43,30 @@ func (c *Controller) List(w http.ResponseWriter, r *http.Request) {
 	}
 	httpx.WriteJSON(w, 200, cats)
 }
+
+func (c *Controller) Update(w http.ResponseWriter, r *http.Request) {
+	id, ok := httpx.PathID(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		Name string `json:"name"`
+	}
+	if !httpx.Decode(w, r, &req) {
+		return
+	}
+	if strings.TrimSpace(req.Name) == "" {
+		httpx.Err(w, 400, "name required")
+		return
+	}
+	switch err := c.svc.Rename(r.Context(), id, req.Name); {
+	case err == nil:
+		w.WriteHeader(204)
+	case err == mongo.ErrNoDocuments:
+		httpx.Err(w, 404, "category not found")
+	case mongo.IsDuplicateKeyError(err):
+		httpx.Err(w, 409, "category exists")
+	default:
+		httpx.Err(w, 500, "could not update category")
+	}
+}
