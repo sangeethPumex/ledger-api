@@ -44,10 +44,7 @@ func main() {
 	_ = godotenv.Load(".env") // real env vars win; missing file is fine
 	uri, dbName, apiKey := mustEnv("MONGODB_URI"), mustEnv("MONGODB_DB"), mustEnv("API_SECRET")
 	model := mustEnv("NVIDIA_MODEL")
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8081"
-	}
+	port := mustEnv("PORT")
 
 	client, err := mongo.Connect(options.Client().ApplyURI(uri))
 	check(err)
