@@ -41,6 +41,28 @@ type Emi struct {
 	Original *float64       `json:"original,omitempty" bson:"original,omitempty"`
 	CardID   *bson.ObjectID `json:"cardId,omitempty" bson:"cardId,omitempty"` // the credit card this was converted from or charged to
 	Payments []Payment      `json:"payments,omitempty" bson:"payments,omitempty"`
+	// RateType is "variable" (the lender can reset Rate; the EMI stays and the tenure moves) or "fixed". Rates lists past rates, oldest first.
+	RateType string       `json:"rateType,omitempty" bson:"rateType,omitempty"`
+	Rates    []RateChange `json:"rates,omitempty" bson:"rates,omitempty"`
+	// Ledger is the lender's statement, one row per billing period. Served by the schedule route only.
+	Ledger []Period `json:"-" bson:"ledger,omitempty"`
+}
+
+// RateChange is a rate that took effect on From (yyyy-mm-dd; empty for the loan's start).
+type RateChange struct {
+	From string  `json:"from" bson:"from"`
+	Rate float64 `json:"rate" bson:"rate"`
+}
+
+// Period is one statement row. Interest is charged on the balance for the days in the period; Principal = EMI + Extra - Interest.
+type Period struct {
+	From      string  `json:"from" bson:"from"`
+	To        string  `json:"to" bson:"to"`
+	Interest  float64 `json:"interest" bson:"interest"`
+	EMI       float64 `json:"emi" bson:"emi"`
+	Extra     float64 `json:"extra" bson:"extra"`
+	Principal float64 `json:"principal" bson:"principal"`
+	Closing   float64 `json:"closing" bson:"closing"`
 }
 
 // Input is what a client may set; payments change only through the payment routes.
@@ -55,6 +77,7 @@ type Input struct {
 	Balance  *float64       `json:"balance"`
 	Original *float64       `json:"original"`
 	CardID   *bson.ObjectID `json:"cardId"`
+	RateType string         `json:"rateType"`
 }
 
 func bad(v ...float64) bool {
@@ -94,6 +117,8 @@ func (in *Input) Validate() string {
 		return "total instalments must be at least 1"
 	case in.Total < 0 || in.Paid < 0 || in.Paid > in.Total:
 		return "paid must be between 0 and total"
+	case in.RateType != "" && in.RateType != "fixed" && in.RateType != "variable":
+		return "rateType must be fixed or variable"
 	case badp(in.Rate, in.Balance, in.Original):
 		return "rate, balance and original must not be negative"
 	}

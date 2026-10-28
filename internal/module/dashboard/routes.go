@@ -30,6 +30,37 @@ func (c *Controller) period(w http.ResponseWriter, r *http.Request, now time.Tim
 	return rng, key, true
 }
 
+var netWorthRanges = map[string]int{"1m": 1, "3m": 3, "6m": 6, "1y": 12}
+
+func (c *Controller) NetWorth(w http.ResponseWriter, r *http.Request) {
+	rng := r.URL.Query().Get("range")
+	if rng == "" {
+		rng = "6m"
+	}
+	months, ok := netWorthRanges[rng]
+	if !ok {
+		httpx.Err(w, 400, "range must be 1m, 3m, 6m or 1y")
+		return
+	}
+	resp, err := c.svc.NetWorth(r.Context(), months, time.Now())
+	if err != nil {
+		log.Printf("dashboard: networth: %v", err)
+		httpx.Err(w, 500, "could not compute net worth")
+		return
+	}
+	httpx.WriteJSON(w, 200, resp)
+}
+
+func (c *Controller) Daily(w http.ResponseWriter, r *http.Request) {
+	days, err := c.svc.DailySpend(r.Context(), time.Now())
+	if err != nil {
+		log.Printf("dashboard: daily: %v", err)
+		httpx.Err(w, 500, "could not compute daily spending")
+		return
+	}
+	httpx.WriteJSON(w, 200, days)
+}
+
 func (c *Controller) Get(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	rng, key, ok := c.period(w, r, now)
@@ -102,5 +133,7 @@ func advicePrompt(d *Response, p *profile.Profile) string {
 
 func RegisterRoutes(mux *http.ServeMux, c *Controller, auth func(http.Handler) http.Handler) {
 	mux.Handle("GET /dashboard", auth(http.HandlerFunc(c.Get)))
+	mux.Handle("GET /dashboard/daily", auth(http.HandlerFunc(c.Daily)))
+	mux.Handle("GET /dashboard/networth", auth(http.HandlerFunc(c.NetWorth)))
 	mux.Handle("GET /dashboard/advice", auth(http.HandlerFunc(c.Advice)))
 }

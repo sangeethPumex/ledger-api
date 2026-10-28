@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"context"
+	"log"
 	"sort"
 	"time"
 
@@ -24,6 +25,7 @@ type Chatter interface {
 
 type Service struct {
 	txs      *mongo.Collection // owned by the transactions module; read only
+	months   *mongo.Collection // month-end net worth, owned here
 	accounts *accounts.Service
 	cards    *cards.Service
 	profile  *profile.Service
@@ -33,7 +35,13 @@ type Service struct {
 }
 
 func NewService(db *mongo.Database, a *accounts.Service, c *cards.Service, p *profile.Service, e *emis.Service, f *funds.Service, llm Chatter) *Service {
-	return &Service{txs: db.Collection("transactions"), accounts: a, cards: c, profile: p, emis: e, funds: f, llm: llm}
+	s := &Service{txs: db.Collection("transactions"), months: db.Collection("networth"), accounts: a, cards: c, profile: p, emis: e, funds: f, llm: llm}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := s.seed(ctx); err != nil {
+		log.Printf("dashboard: seed net worth history: %v", err)
+	}
+	return s
 }
 
 type txnDoc struct {
@@ -224,14 +232,17 @@ func (s *Service) recent(ctx context.Context, r Range, n names, limit int64) ([]
 }
 
 type Position struct {
-	Cash       int64        `json:"cashPaise"`
-	Accounts   int          `json:"accounts"`
-	NetWorth   int64        `json:"netWorthPaise"`
-	Invested   int64        `json:"investedPaise"`
-	Current    int64        `json:"currentPaise"`
-	Pnl        int64        `json:"pnlPaise"`
-	Allocation []Allocation `json:"allocation"`
-	UsesFunds  bool         `json:"usesFunds"` // mutual funds come from tracked funds, not the typed bucket
+	Cash           int64        `json:"cashPaise"`
+	Accounts       int          `json:"accounts"`
+	NetWorth       int64        `json:"netWorthPaise"`                 // cash + investments; money owed is not subtracted
+	Liabilities    int64        `json:"liabilitiesPaise"`              // money owed: outstanding EMIs and loans
+	NetWorthChange *int64       `json:"netWorthChangePaise,omitempty"` // against the last recorded month-end
+	ChangeSince    string       `json:"netWorthChangeSince,omitempty"`
+	Invested       int64        `json:"investedPaise"`
+	Current        int64        `json:"currentPaise"`
+	Pnl            int64        `json:"pnlPaise"`
+	Allocation     []Allocation `json:"allocation"`
+	UsesFunds      bool         `json:"usesFunds"` // mutual funds come from tracked funds, not the typed bucket
 }
 
 type Allocation struct {
@@ -315,7 +326,16 @@ func (s *Service) Get(ctx context.Context, r Range, key string, now time.Time) (
 	}
 	pos.Invested = mfInvested + paise(prof.Stocks.Invested) + paise(prof.Other.Invested)
 	pos.Current = mfCurrent + paise(prof.Stocks.Current) + paise(prof.Other.Current)
+	pos.Liabilities = paise(emiSum.Outstanding)
 	pos.Pnl, pos.NetWorth = pos.Current-pos.Invested, cash+pos.Current
+	if err := s.record(ctx, now, pos); err != nil {
+		log.Printf("dashboard: net-worth record: %v", err)
+	}
+	if ch, since, ok, err := s.lastMonthChange(ctx, now, pos.NetWorth); err != nil {
+		log.Printf("dashboard: net-worth change: %v", err)
+	} else if ok {
+		pos.NetWorthChange, pos.ChangeSince = &ch, since
+	}
 	pos.Allocation = []Allocation{{"Cash", cash}, {"Mutual Funds", mfCurrent}, {"Stocks", paise(prof.Stocks.Current)}, {"Other", paise(prof.Other.Current)}}
 
 	recent, err := s.recent(ctx, r, n, 8)

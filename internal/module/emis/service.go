@@ -24,7 +24,11 @@ type Service struct {
 
 func NewService(ctx context.Context, db *mongo.Database) (*Service, error) {
 	col := db.Collection(Collection)
-	return &Service{col: col, cards: db.Collection("credit_cards")}, legacy.StringIDs(ctx, col)
+	s := &Service{col: col, cards: db.Collection("credit_cards")}
+	if err := legacy.StringIDs(ctx, col); err != nil {
+		return s, err
+	}
+	return s, s.seedCarLoan(ctx)
 }
 
 func (s *Service) get(ctx context.Context, id bson.ObjectID) (*Emi, error) {
@@ -98,7 +102,7 @@ func (s *Service) Create(ctx context.Context, in Input) (*Emi, error) {
 	if err := s.checkCard(ctx, in.CardID); err != nil {
 		return nil, err
 	}
-	e := &Emi{ID: bson.NewObjectID(), Name: trim(in.Name), Kind: in.Kind, Amount: in.Amount, DueDay: in.DueDay, Total: in.Total, Paid: in.Paid, Rate: in.Rate, Balance: in.Balance, Original: in.Original, CardID: in.CardID}
+	e := &Emi{ID: bson.NewObjectID(), Name: trim(in.Name), Kind: in.Kind, Amount: in.Amount, DueDay: in.DueDay, Total: in.Total, Paid: in.Paid, Rate: in.Rate, Balance: in.Balance, Original: in.Original, CardID: in.CardID, RateType: in.RateType}
 	if e.Kind == "card" {
 		e.Total, e.Paid = 0, 0
 	}
@@ -116,7 +120,13 @@ func (s *Service) Update(ctx context.Context, id bson.ObjectID, in Input) error 
 		return err
 	}
 	e.Name, e.Kind, e.Amount, e.DueDay, e.Total, e.Paid = trim(in.Name), in.Kind, in.Amount, in.DueDay, in.Total, in.Paid
-	e.Rate, e.Balance, e.Original, e.CardID = in.Rate, in.Balance, in.Original, in.CardID
+	if e.Rate != nil && in.Rate != nil && *e.Rate != *in.Rate { // keep the old rate in the history so a reset is visible
+		if len(e.Rates) == 0 {
+			e.Rates = []RateChange{{Rate: *e.Rate}}
+		}
+		e.Rates = append(e.Rates, RateChange{From: ist.Midnight(time.Now()).Format("2006-01-02"), Rate: *in.Rate})
+	}
+	e.Rate, e.Balance, e.Original, e.CardID, e.RateType = in.Rate, in.Balance, in.Original, in.CardID, in.RateType
 	if e.Kind == "card" {
 		e.Total, e.Paid = 0, 0
 	}

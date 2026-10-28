@@ -28,10 +28,9 @@ func (c *Client) Chat(ctx context.Context, system, user string) (string, error) 
 			{"role": "system", "content": system},
 			{"role": "user", "content": user},
 		},
-		"max_tokens":       4096,
-		"reasoning_budget": 2048,
-		"temperature":      0,
-		"stream":           false,
+		"max_tokens":  4096,
+		"temperature": 0,
+		"stream":      false,
 	})
 	req, err := http.NewRequestWithContext(ctx, "POST", "https://integrate.api.nvidia.com/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
@@ -46,7 +45,7 @@ func (c *Client) Chat(ctx context.Context, system, user string) (string, error) 
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("nim status %d", resp.StatusCode)
+		return "", fmt.Errorf("nim status %d: %.200s", resp.StatusCode, raw)
 	}
 	var out struct {
 		Choices []struct {
