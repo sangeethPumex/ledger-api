@@ -63,7 +63,8 @@ func main() {
 	check(err)
 	cardSvc, err := cards.NewService(ctx, db)
 	check(err)
-	llm := nim.New(mustEnv("NVIDIA_API_KEY"), model)
+	llm := nim.New("https://integrate.api.nvidia.com/v1/chat/completions", mustEnv("NVIDIA_API_KEY"), model)
+	chatLLM := nim.New("https://cloud.olakrutrim.com/v1/chat/completions", mustEnv("KRUTRIM_API_KEY"), mustEnv("KRUTRIM_MODEL"))
 	txSvc, err := transactions.NewService(ctx, db, rawSvc, vendSvc, catSvc, accSvc, cardSvc, llm, model)
 	check(err)
 	vendSvc.OnChange = txSvc.Resync
@@ -77,7 +78,7 @@ func main() {
 	}
 	stockSvc := stocks.NewService(db, stocks.NewYahoo(yahooURL))
 	profSvc := profile.NewService(db)
-	dashSvc := dashboard.NewService(db, accSvc, cardSvc, profSvc, emiSvc, fundSvc, llm)
+	dashSvc := dashboard.NewService(db, accSvc, cardSvc, profSvc, emiSvc, fundSvc, chatLLM)
 
 	// Parse messages as ledger-api inserts them (change stream); sequential, so one LLM call at a time.
 	// The watcher also fires on every (re)connect, which catches up anything missed while we were down.

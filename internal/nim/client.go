@@ -1,4 +1,4 @@
-// Package nim is a minimal NVIDIA NIM chat-completions client.
+// Package nim is a minimal OpenAI-compatible chat-completions client (NVIDIA NIM, Krutrim).
 package nim
 
 import (
@@ -14,12 +14,12 @@ import (
 )
 
 type Client struct {
-	Key, Model string
+	URL, Key, Model string
 	HTTP       *http.Client
 }
 
-func New(key, model string) *Client {
-	return &Client{Key: key, Model: model, HTTP: &http.Client{Timeout: 90 * time.Second}}
+func New(url, key, model string) *Client {
+	return &Client{URL: url, Key: key, Model: model, HTTP: &http.Client{Timeout: 90 * time.Second}}
 }
 
 // Chat returns the assistant's final content (reasoning_content is ignored).
@@ -34,7 +34,7 @@ func (c *Client) Chat(ctx context.Context, system, user string) (string, error) 
 		"temperature": 0,
 		"stream":      false,
 	})
-	req, err := http.NewRequestWithContext(ctx, "POST", "https://integrate.api.nvidia.com/v1/chat/completions", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", c.URL, bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
@@ -78,7 +78,7 @@ func (c *Client) ChatStream(ctx context.Context, system string, msgs []Message, 
 		"temperature": 0.3,
 		"stream":      true,
 	})
-	req, err := http.NewRequestWithContext(ctx, "POST", "https://integrate.api.nvidia.com/v1/chat/completions", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", c.URL, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
