@@ -3,9 +3,7 @@ package transactions
 import (
 	"errors"
 	"net/http"
-	"strconv"
 
-	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"ledger-backend/internal/httpx"
@@ -32,39 +30,41 @@ func (c *Controller) Reparse(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *Controller) List(w http.ResponseWriter, r *http.Request) {
-	var nr *bool
-	if q := r.URL.Query().Get("needs_review"); q != "" {
-		b, err := strconv.ParseBool(q)
-		if err != nil {
-			httpx.Err(w, 400, "needs_review must be true or false")
-			return
-		}
-		nr = &b
+	f, msg := ParseFilter(r.URL.Query())
+	if msg != "" {
+		httpx.Err(w, 400, msg)
+		return
 	}
-	limit := int64(50)
-	if q := r.URL.Query().Get("limit"); q != "" {
-		n, err := strconv.ParseInt(q, 10, 64)
-		if err != nil || n < 1 || n > 1000 {
-			httpx.Err(w, 400, "limit must be 1-1000")
-			return
-		}
-		limit = n
-	}
-	var acc *bson.ObjectID
-	if q := r.URL.Query().Get("account_id"); q != "" {
-		id, err := bson.ObjectIDFromHex(q)
-		if err != nil {
-			httpx.Err(w, 400, "account_id is not a valid id")
-			return
-		}
-		acc = &id
-	}
-	ts, err := c.svc.List(r.Context(), nr, acc, limit)
+	ts, err := c.svc.List(r.Context(), f)
 	if err != nil {
 		httpx.Err(w, 500, "could not list transactions")
 		return
 	}
 	httpx.WriteJSON(w, 200, ts)
+}
+
+// Patch sets a transaction's category and, for card payments, the card it paid.
+func (c *Controller) Patch(w http.ResponseWriter, r *http.Request) {
+	id, ok := httpx.PathID(w, r)
+	if !ok {
+		return
+	}
+	var req Patch
+	if !httpx.Decode(w, r, &req) {
+		return
+	}
+	err := c.svc.Patch(r.Context(), id, req)
+	var bad ErrPatch
+	switch {
+	case err == nil:
+		w.WriteHeader(204)
+	case errors.As(err, &bad):
+		httpx.Err(w, 400, bad.Error())
+	case errors.Is(err, mongo.ErrNoDocuments):
+		httpx.Err(w, 404, "transaction not found")
+	default:
+		httpx.Err(w, 500, "could not update transaction")
+	}
 }
 
 func (c *Controller) Summary(w http.ResponseWriter, r *http.Request) {

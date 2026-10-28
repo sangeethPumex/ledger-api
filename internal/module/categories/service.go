@@ -16,7 +16,23 @@ func NewService(ctx context.Context, db *mongo.Database) (*Service, error) {
 	_, err := col.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys: bson.D{{Key: "name", Value: 1}}, Options: options.Index().SetUnique(true),
 	})
+	if err == nil { // always present: the app links card payments through it
+		_, err = col.UpdateOne(ctx, bson.M{"name": CardPayments}, bson.M{"$setOnInsert": bson.M{"_id": bson.NewObjectID()}}, options.UpdateOne().SetUpsert(true))
+	}
 	return &Service{col: col}, err
+}
+
+// CardPaymentsID is the id of the CardPayments category.
+func (s *Service) CardPaymentsID(ctx context.Context) (bson.ObjectID, error) {
+	var c Category
+	err := s.col.FindOne(ctx, bson.M{"name": CardPayments}).Decode(&c)
+	return c.ID, err
+}
+
+// Exists reports whether a category with this id is there.
+func (s *Service) Exists(ctx context.Context, id bson.ObjectID) (bool, error) {
+	n, err := s.col.CountDocuments(ctx, bson.M{"_id": id})
+	return n > 0, err
 }
 
 func (s *Service) Create(ctx context.Context, name string) (*Category, error) {

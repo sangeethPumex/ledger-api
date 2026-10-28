@@ -15,6 +15,7 @@ import (
 	"ledger-backend/internal/module/cards"
 	"ledger-backend/internal/module/emis"
 	"ledger-backend/internal/module/funds"
+	"ledger-backend/internal/module/mandates"
 	"ledger-backend/internal/module/profile"
 	"ledger-backend/internal/nim"
 )
@@ -33,11 +34,12 @@ type Service struct {
 	profile  *profile.Service
 	emis     *emis.Service
 	funds    *funds.Service
+	mandates *mandates.Service
 	llm      Chatter
 }
 
-func NewService(db *mongo.Database, a *accounts.Service, c *cards.Service, p *profile.Service, e *emis.Service, f *funds.Service, llm Chatter) *Service {
-	s := &Service{txs: db.Collection("transactions"), months: db.Collection("networth"), accounts: a, cards: c, profile: p, emis: e, funds: f, llm: llm}
+func NewService(db *mongo.Database, a *accounts.Service, c *cards.Service, p *profile.Service, e *emis.Service, f *funds.Service, m *mandates.Service, llm Chatter) *Service {
+	s := &Service{txs: db.Collection("transactions"), months: db.Collection("networth"), accounts: a, cards: c, profile: p, emis: e, funds: f, mandates: m, llm: llm}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := s.seed(ctx); err != nil {
@@ -88,6 +90,9 @@ func (s *Service) aggregate(ctx context.Context, from, to time.Time) ([]flowDoc,
 				bson.M{"type": bson.M{"$in": bson.A{"expense", "atm", "emi"}}, "direction": bson.M{"$ne": "credit"}},
 			},
 		}}},
+		// The part of a payment a friend owes back is not the user's spend; everything below sees only the rest.
+		{{Key: "$addFields", Value: bson.M{"amount_paise": bson.M{"$subtract": bson.A{"$amount_paise", bson.M{"$ifNull": bson.A{"$owed_paise", 0}}}}}}},
+		{{Key: "$match", Value: bson.M{"amount_paise": bson.M{"$gt": 0}}}},
 		{{Key: "$lookup", Value: bson.M{"from": "categories", "localField": "category_id", "foreignField": "_id", "as": "cat"}}},
 		{{Key: "$addFields", Value: bson.M{
 			"_dir":   bson.M{"$cond": bson.A{bson.M{"$eq": bson.A{"$type", "income"}}, "in", "out"}},
@@ -252,13 +257,41 @@ type Allocation struct {
 	Paise int64  `json:"paise"`
 }
 
+// Mandates is what must be paid in the next 90 days (see the mandates module), soonest first.
+type Mandates struct {
+	Next30   int64          `json:"next30Paise"`
+	Next90   int64          `json:"next90Paise"`
+	SetAside int64          `json:"setAsidePaise"` // per month, across all mandates
+	Due      []mandates.Occ `json:"due"`
+}
+
 type Response struct {
 	Period       Period    `json:"period"`
 	Position     Position  `json:"position"`
 	Cashflow     Cashflow  `json:"cashflow"`
 	Upcoming     Upcoming  `json:"upcoming"`
+	OwedToYou    int64     `json:"owedToYouPaise"` // still to come back from people the user paid for
+	Mandates     Mandates  `json:"mandates"`
 	Recent       []TxnView `json:"recent"`
 	NeedsProfile bool      `json:"needsProfile"`
+}
+
+// owedToYou is what is still outstanding on payments made for others.
+func (s *Service) owedToYou(ctx context.Context) (int64, error) {
+	cur, err := s.txs.Aggregate(ctx, mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{"owed_paise": bson.M{"$gt": 0}}}},
+		{{Key: "$group", Value: bson.M{"_id": nil, "paise": bson.M{"$sum": bson.M{"$subtract": bson.A{"$owed_paise", bson.M{"$ifNull": bson.A{"$repaid_paise", 0}}}}}}}},
+	})
+	if err != nil {
+		return 0, err
+	}
+	var res []struct {
+		Paise int64 `bson:"paise"`
+	}
+	if err := cur.All(ctx, &res); err != nil || len(res) == 0 {
+		return 0, err
+	}
+	return res[0].Paise, nil
 }
 
 // Get builds the whole dashboard for a period. It also nudges a background NAV refresh so fund values are fresh next time.
@@ -344,9 +377,23 @@ func (s *Service) Get(ctx context.Context, r Range, key string, now time.Time) (
 	if err != nil {
 		return nil, err
 	}
+	owed, err := s.owedToYou(ctx)
+	if err != nil {
+		return nil, err
+	}
+	plan, err := s.mandates.Plan(ctx, now)
+	if err != nil {
+		return nil, err
+	}
+	m := Mandates{Next30: plan.Next30, Next90: plan.Next90, SetAside: plan.SetAside, Due: []mandates.Occ{}}
+	for _, o := range plan.Calendar {
+		if o.Days < 90 {
+			m.Due = append(m.Due, o)
+		}
+	}
 	return &Response{
 		Period:   Period{Key: key, From: r.From.Format(time.RFC3339), To: r.To.Format(time.RFC3339)},
-		Position: pos, Cashflow: cf, Recent: recent,
+		Position: pos, Cashflow: cf, Recent: recent, Mandates: m, OwedToYou: owed,
 		Upcoming:     upcoming(upcomingIn{Cash: cash, Profile: prof, Emis: emiSum, Funds: fundSum, Last30: last30, MonthSpent: monthSpent, Today: todaySpent, Now: now}),
 		NeedsProfile: prof.Salary == 0 && pos.Invested == 0,
 	}, nil

@@ -33,7 +33,17 @@ type Transaction struct {
 	UPIID               string         `bson:"upi_id,omitempty" json:"upi_id,omitempty"`
 	VendorID            *bson.ObjectID `bson:"vendor_id,omitempty" json:"vendor_id,omitempty"`
 	CategoryID          *bson.ObjectID `bson:"category_id,omitempty" json:"category_id,omitempty"`
-	NeedsReview         bool           `bson:"needs_review" json:"needs_review"`
+	// PaidCardID is the credit card this payment settles (category "Credit card payments"). The type then becomes card_bill_payment
+	// so the payment is not counted as spending; TypeBefore remembers the parsed type to restore when unlinked.
+	PaidCardID *bson.ObjectID `bson:"paid_card_id,omitempty" json:"paid_card_id,omitempty"`
+	TypeBefore string         `bson:"type_before,omitempty" json:"-"`
+	// CategorySet marks a category chosen on this transaction, which vendor changes must not overwrite.
+	CategorySet         bool `bson:"category_set,omitempty" json:"category_set,omitempty"`
+	// Owed: part of this payment someone else owes back (paid for a friend). It is not the user's own spending, so totals leave it out.
+	OwedFrom    string `bson:"owed_from,omitempty" json:"owed_from,omitempty"`
+	OwedPaise   int64  `bson:"owed_paise,omitempty" json:"owed_paise,omitempty"`
+	RepaidPaise int64  `bson:"repaid_paise,omitempty" json:"repaid_paise,omitempty"`
+	NeedsReview         bool          `bson:"needs_review" json:"needs_review"`
 	ReviewReason        string         `bson:"review_reason,omitempty" json:"review_reason,omitempty"`
 	SuggestedCategoryID *bson.ObjectID `bson:"suggested_category_id,omitempty" json:"suggested_category_id,omitempty"`
 	Model               string         `bson:"model" json:"model"`

@@ -170,22 +170,15 @@ func (s *Service) resync(ctx context.Context) error {
 		if v.CategoryID == nil {
 			continue
 		}
-		if _, err := s.col.UpdateMany(ctx, bson.M{"vendor_id": v.ID}, bson.M{"$set": bson.M{"category_id": *v.CategoryID}}); err != nil {
+		if _, err := s.col.UpdateMany(ctx, bson.M{"vendor_id": v.ID, "category_set": bson.M{"$ne": true}}, bson.M{"$set": bson.M{"category_id": *v.CategoryID}}); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s *Service) List(ctx context.Context, needsReview *bool, accountID *bson.ObjectID, limit int64) ([]Transaction, error) {
-	filter := bson.M{}
-	if accountID != nil {
-		filter["account_id"] = *accountID
-	}
-	if needsReview != nil {
-		filter["needs_review"] = *needsReview
-	}
-	cur, err := s.col.Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "received_at", Value: -1}, {Key: "occurred_at", Value: -1}, {Key: "_id", Value: -1}}).SetLimit(limit))
+func (s *Service) List(ctx context.Context, f Filter) ([]Transaction, error) {
+	cur, err := s.col.Find(ctx, f.Query(), options.Find().SetSort(bson.D{{Key: "received_at", Value: -1}, {Key: "occurred_at", Value: -1}, {Key: "_id", Value: -1}}).SetLimit(f.Limit))
 	if err != nil {
 		return nil, err
 	}
@@ -257,8 +250,9 @@ func (s *Service) Summary(ctx context.Context) (*Summary, error) {
 	for _, t := range ts {
 		at := t.OccurredAt.In(ist)
 		spend := (t.Type == "expense" || t.Type == "atm" || t.Type == "emi") && t.Direction != "credit"
+		amt := t.AmountPaise - t.OwedPaise // the part a friend owes back is not the user's spend
 		if i, ok := idx[at.Format("2006-01-02")]; ok && spend {
-			out.Daily[i].Paise += t.AmountPaise
+			out.Daily[i].Paise += amt
 		}
 		if at.Before(monthStart) {
 			continue
@@ -267,11 +261,11 @@ func (s *Service) Summary(ctx context.Context) (*Summary, error) {
 			out.IncomePaise += t.AmountPaise
 		}
 		if spend {
-			out.SpentPaise += t.AmountPaise
+			out.SpentPaise += amt
 			if t.CategoryID != nil {
-				cats[*t.CategoryID] += t.AmountPaise
+				cats[*t.CategoryID] += amt
 			} else {
-				uncategorised += t.AmountPaise
+				uncategorised += amt
 			}
 		}
 	}

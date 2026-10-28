@@ -65,11 +65,45 @@ func TestCompute(t *testing.T) {
 	}
 }
 
+func TestBuildStatement(t *testing.T) {
+	c := Card{BillingDay: 15, DueDay: 5}
+	s := BuildStatement(c, 40_000_00, 10_000_00, at(2026, 10, 20))
+	if s.From != "2026-09-15" || s.To != "2026-10-15" || s.DueDate != "2026-11-05" || s.DaysToDue != 16 {
+		t.Errorf("dates: %+v", s)
+	}
+	if s.UnpaidPaise != 30_000_00 || s.MinDuePaise != 1_500_00 || s.Remind || s.Overdue {
+		t.Errorf("amounts: %+v", s)
+	}
+	// 3.5% a month by default: on 28,500 left after the minimum, and on all 30,000 if skipped
+	if s.Apr != DefaultApr || s.InterestIfMinPaise != 997_50 || s.InterestIfSkippedPaise != 1050_00 {
+		t.Errorf("interest: %+v", s)
+	}
+
+	if s := BuildStatement(Card{BillingDay: 5, DueDay: 25, Apr: 36}, 1000_00, 0, at(2026, 10, 10)); s.DueDate != "2026-10-25" || s.DaysToDue != 15 || s.InterestIfSkippedPaise != 30_00 {
+		t.Errorf("due after billing in the same month: %+v", s)
+	}
+	if s := BuildStatement(Card{BillingDay: 31, DueDay: 20}, 1, 0, at(2026, 3, 5)); s.To != "2026-02-28" || s.DueDate != "2026-03-20" {
+		t.Errorf("short month: %+v", s)
+	}
+	if s := BuildStatement(c, 1000_00, 0, at(2026, 11, 2)); !s.Remind || s.Overdue || s.DaysToDue != 3 {
+		t.Errorf("reminder near due date: %+v", s)
+	}
+	if s := BuildStatement(Card{BillingDay: 15, DueDay: 18}, 1000_00, 0, at(2026, 10, 20)); !s.Overdue || !s.Remind || s.DaysToDue != -2 {
+		t.Errorf("overdue: %+v", s)
+	}
+	if s := BuildStatement(Card{BillingDay: 15, DueDay: 18}, 1000_00, 1200_00, at(2026, 10, 20)); s.UnpaidPaise != 0 || s.Remind || s.Overdue || s.MinDuePaise != 0 {
+		t.Errorf("paid in full: %+v", s)
+	}
+	if BuildStatement(Card{BillingDay: 15}, 1, 0, at(2026, 10, 20)) != nil || BuildStatement(Card{DueDay: 5}, 1, 0, at(2026, 10, 20)) != nil {
+		t.Error("no statement without both days")
+	}
+}
+
 func TestValidate(t *testing.T) {
 	neg := int64(-1)
 	bads := []Card{
 		{Name: " "}, {Name: "x", Kind: "debit"}, {Name: "x", Last4: "12a4"}, {Name: "x", LimitPaise: -1},
-		{Name: "x", DueDay: 32}, {Name: "x", BillingDay: -1}, {Name: "x", OutstandingPaise: &neg},
+		{Name: "x", DueDay: 32}, {Name: "x", BillingDay: -1}, {Name: "x", OutstandingPaise: &neg}, {Name: "x", Apr: 101},
 	}
 	for i, c := range bads {
 		if c.Validate() == "" {
@@ -126,5 +160,27 @@ func TestApplyShared(t *testing.T) {
 	ApplyShared(chain)
 	if chain[0].SharedWith != nil {
 		t.Error("a card pointing at a sharing card must fall back to standalone")
+	}
+}
+
+func TestAddUnpaidStatement(t *testing.T) {
+	c := Card{BillingDay: 15, DueDay: 5, LimitPaise: 100_000_00}
+	mk := func(paid int64) View {
+		v := Compute(c, 10_000_00, 3, nil, at(2026, 10, 20))
+		v.Statement = BuildStatement(c, 40_000_00, paid, at(2026, 10, 20))
+		v.AddUnpaidStatement()
+		return v
+	}
+	if v := mk(0); v.UsedPaise != 50_000_00 || *v.AvailablePaise != 50_000_00 || *v.Utilisation != 0.5 {
+		t.Errorf("unpaid bill counts as used: %d %v", v.UsedPaise, *v.Utilisation)
+	}
+	if v := mk(25_000_00); v.UsedPaise != 25_000_00 { // partial payment frees the limit
+		t.Errorf("partial: %d", v.UsedPaise)
+	}
+	manual := int64(7_000_00)
+	v := Compute(Card{OutstandingPaise: &manual, BillingDay: 15, DueDay: 5}, 1, 1, nil, at(2026, 10, 20))
+	v.Statement = BuildStatement(v.Card, 40_000_00, 0, at(2026, 10, 20))
+	if v.AddUnpaidStatement(); v.UsedPaise != manual {
+		t.Error("manual outstanding already includes the bill")
 	}
 }

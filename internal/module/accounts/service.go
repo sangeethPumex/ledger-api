@@ -26,7 +26,40 @@ func NewService(ctx context.Context, db *mongo.Database) (*Service, error) {
 	if err == nil {
 		normalizeBanks(ctx, col)
 	}
-	return &Service{col: col, txs: db.Collection("transactions"), funds: db.Collection("funds"), fundSettings: db.Collection("fund_settings")}, err
+	s := &Service{col: col, txs: db.Collection("transactions"), funds: db.Collection("funds"), fundSettings: db.Collection("fund_settings")}
+	if err == nil {
+		s.linkOrphans(ctx)
+	}
+	return s, err
+}
+
+// linkOrphans links transactions that no account or card claimed to the account whose last4 they carry, e.g. after the number was corrected.
+// Safe to repeat.
+func (s *Service) linkOrphans(ctx context.Context) {
+	cur, err := s.col.Find(ctx, bson.D{}, options.Find().SetProjection(bson.M{"last4": 1}))
+	if err != nil {
+		log.Printf("link orphans: %v", err)
+		return
+	}
+	var all []Account
+	if err := cur.All(ctx, &all); err != nil {
+		log.Printf("link orphans: %v", err)
+		return
+	}
+	n := map[string]int{}
+	for _, a := range all {
+		n[a.Last4]++
+	}
+	for _, a := range all {
+		if a.Last4 == "" || n[a.Last4] > 1 { // a number shared by two banks cannot be told apart here
+			continue
+		}
+		if _, err := s.txs.UpdateMany(ctx,
+			bson.M{"account_last4": a.Last4, "account_id": bson.M{"$exists": false}, "card_id": bson.M{"$exists": false}},
+			bson.M{"$set": bson.M{"account_id": a.ID}}); err != nil {
+			log.Printf("link orphans %s: %v", a.Last4, err)
+		}
+	}
 }
 
 // normalizeBanks strips a "••1234" slug from banks saved with one. Safe to repeat. An account whose clean name would
@@ -74,7 +107,8 @@ type Patch struct {
 	OpeningAt           *time.Time
 }
 
-// Update changes the given fields. Transactions already link by account id, so renaming the bank or last4 only affects how future SMS match.
+// Update changes the given fields. Transactions already link by account id, so renaming the bank or last4 does not move linked ones;
+// a new last4 does pick up transactions that were never linked to any account.
 func (s *Service) Update(ctx context.Context, id bson.ObjectID, p Patch) error {
 	set := bson.M{}
 	if p.Name != nil {
@@ -95,6 +129,11 @@ func (s *Service) Update(ctx context.Context, id bson.ObjectID, p Patch) error {
 	r, err := s.col.UpdateByID(ctx, id, bson.M{"$set": set})
 	if err == nil && r.MatchedCount == 0 {
 		return mongo.ErrNoDocuments
+	}
+	if err == nil && p.Last4 != nil && *p.Last4 != "" { // SMS parsed before this number was set had no account to link to
+		_, err = s.txs.UpdateMany(ctx,
+			bson.M{"account_last4": *p.Last4, "account_id": bson.M{"$exists": false}, "card_id": bson.M{"$exists": false}},
+			bson.M{"$set": bson.M{"account_id": id}})
 	}
 	return err
 }

@@ -188,6 +188,25 @@ func (c *Controller) Schedule(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, 200, out)
 }
 
+// Planner compares avalanche and snowball for ?extra= rupees of prepayment a month (default 0).
+func (c *Controller) Planner(w http.ResponseWriter, r *http.Request) {
+	extra := 0.0
+	if q := r.URL.Query().Get("extra"); q != "" {
+		var err error
+		if extra, err = strconv.ParseFloat(q, 64); err != nil || bad(extra) || extra > 1e8 {
+			httpx.Err(w, 400, "extra must be a number between 0 and 100000000")
+			return
+		}
+	}
+	out, err := c.svc.Plan(r.Context(), extra)
+	if err != nil {
+		log.Printf("emi plan: %v", err)
+		httpx.Err(w, 500, "could not build payoff plan")
+		return
+	}
+	httpx.WriteJSON(w, 200, out)
+}
+
 func (c *Controller) AddRate(w http.ResponseWriter, r *http.Request) {
 	id, ok := httpx.PathID(w, r)
 	if !ok {
@@ -233,6 +252,7 @@ func RegisterRoutes(mux *http.ServeMux, c *Controller, auth func(http.Handler) h
 	mux.Handle("POST /emis/{id}/payments", h(c.AddPayment))
 	mux.Handle("DELETE /emis/{id}/payments/last", h(c.UndoLast))
 	mux.Handle("PUT /emis/{id}/balance", h(c.SetBalance))
+	mux.Handle("GET /emis/payoff", h(c.Planner))
 	mux.Handle("GET /emis/{id}/impact", h(c.Impact))
 	mux.Handle("GET /emis/{id}/schedule", h(c.Schedule))
 	mux.Handle("POST /emis/{id}/rates", h(c.AddRate))

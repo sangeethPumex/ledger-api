@@ -29,6 +29,8 @@ type Card struct {
 	LimitPaise int64         `bson:"limit_paise,omitempty" json:"limit_paise,omitempty"`
 	BillingDay int           `bson:"billing_day,omitempty" json:"billing_day,omitempty"`
 	DueDay     int           `bson:"due_day,omitempty" json:"due_day,omitempty"`
+	// Apr is the yearly interest rate in percent charged on an unpaid bill. Zero means DefaultApr.
+	Apr float64 `bson:"apr,omitempty" json:"apr,omitempty"`
 	// OutstandingPaise is what the lender's app says is owed. When set it replaces the figure worked out from transactions,
 	// which is the only way to track a line whose SMS carry no card number.
 	OutstandingPaise *int64 `bson:"outstanding_paise,omitempty" json:"outstanding_paise,omitempty"`
@@ -44,6 +46,7 @@ func validLast4(l string) bool {
 	return l == "" || (len(l) == 4 && strings.Trim(l, "0123456789") == "")
 }
 func validDay(d int) bool     { return d >= 0 && d <= 31 }
+func validApr(a float64) bool { return a >= 0 && a <= 100 } // also false for NaN
 func validKind(k string) bool { return k == KindCredit || k == KindPayLater }
 
 // Validate returns a message when the card is unusable.
@@ -59,6 +62,8 @@ func (c *Card) Validate() string {
 		return "limit is out of range"
 	case !validDay(c.BillingDay) || !validDay(c.DueDay):
 		return "billing and due days must be 1-31"
+	case !validApr(c.Apr):
+		return "apr must be 0-100"
 	case c.OutstandingPaise != nil && (*c.OutstandingPaise < 0 || *c.OutstandingPaise > maxPaise):
 		return "outstanding is out of range"
 	}
@@ -68,15 +73,16 @@ func (c *Card) Validate() string {
 // Patch changes the given fields; nil leaves one alone. An empty string or zero clears an optional field
 // (a negative OutstandingPaise clears the manual outstanding).
 type Patch struct {
-	Name             *string `json:"name"`
-	Kind             *string `json:"kind"`
-	Bank             *string `json:"bank"`
-	Last4            *string `json:"last4"`
-	LimitPaise       *int64  `json:"limit_paise"`
-	BillingDay       *int    `json:"billing_day"`
-	DueDay           *int    `json:"due_day"`
-	OutstandingPaise *int64  `json:"outstanding_paise"`
-	SharedWith       *string `json:"shared_with"` // a card id; empty clears
+	Name             *string  `json:"name"`
+	Kind             *string  `json:"kind"`
+	Bank             *string  `json:"bank"`
+	Last4            *string  `json:"last4"`
+	LimitPaise       *int64   `json:"limit_paise"`
+	BillingDay       *int     `json:"billing_day"`
+	DueDay           *int     `json:"due_day"`
+	Apr              *float64 `json:"apr"`
+	OutstandingPaise *int64   `json:"outstanding_paise"`
+	SharedWith       *string  `json:"shared_with"` // a card id; empty clears
 }
 
 func (p *Patch) Validate() string {
@@ -91,6 +97,8 @@ func (p *Patch) Validate() string {
 		return "limit is out of range"
 	case p.BillingDay != nil && !validDay(*p.BillingDay), p.DueDay != nil && !validDay(*p.DueDay):
 		return "billing and due days must be 1-31"
+	case p.Apr != nil && !validApr(*p.Apr):
+		return "apr must be 0-100"
 	case p.OutstandingPaise != nil && *p.OutstandingPaise > maxPaise:
 		return "outstanding is out of range"
 	case p.SharedWith != nil && *p.SharedWith != "" && !validID(*p.SharedWith):
@@ -123,6 +131,7 @@ type View struct {
 	Utilisation        *float64    `json:"utilisation,omitempty"`     // used / limit, may pass 1
 	DaysToBilling      *int        `json:"days_to_billing,omitempty"`
 	DaysToDue          *int        `json:"days_to_due,omitempty"`
+	Statement          *Statement  `json:"statement,omitempty"` // nil without billing and due days
 	// Set by ApplyShared. For a card in a shared group LimitPaise is the group's limit, and Available and Utilisation are the group's.
 	SharedWithName string   `json:"shared_with_name,omitempty"` // the card that owns the limit, on a card that shares
 	SharedCards    []string `json:"shared_cards"`               // names of the other cards in the group

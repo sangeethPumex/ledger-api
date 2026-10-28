@@ -23,7 +23,16 @@ func NewService(ctx context.Context, db *mongo.Database) (*Service, error) {
 	_, err := col.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys: bson.D{{Key: "name", Value: 1}}, Options: options.Index().SetUnique(true),
 	})
-	return &Service{col: col, txs: db.Collection("transactions"), emis: db.Collection(emis.Collection)}, err
+	txs := db.Collection("transactions")
+	for _, f := range []string{"card_id", "paid_card_id"} { // partial: most transactions have neither
+		if err == nil {
+			_, err = txs.Indexes().CreateOne(ctx, mongo.IndexModel{
+				Keys:    bson.D{{Key: f, Value: 1}, {Key: "occurred_at", Value: -1}},
+				Options: options.Index().SetPartialFilterExpression(bson.M{f: bson.M{"$exists": true}}),
+			})
+		}
+	}
+	return &Service{col: col, txs: txs, emis: db.Collection(emis.Collection)}, err
 }
 
 // ErrShare is returned, with a message safe to show, when a limit cannot be shared as asked.
@@ -115,6 +124,9 @@ func (s *Service) Update(ctx context.Context, id bson.ObjectID, p Patch) error {
 	if p.DueDay != nil {
 		put("due_day", *p.DueDay, *p.DueDay == 0)
 	}
+	if p.Apr != nil {
+		put("apr", *p.Apr, *p.Apr == 0)
+	}
 	if p.OutstandingPaise != nil {
 		put("outstanding_paise", *p.OutstandingPaise, *p.OutstandingPaise < 0)
 	}
@@ -146,6 +158,12 @@ func (s *Service) Update(ctx context.Context, id bson.ObjectID, p Patch) error {
 		return mongo.ErrNoDocuments
 	}
 	return err
+}
+
+// Exists reports whether a card with this id is there.
+func (s *Service) Exists(ctx context.Context, id bson.ObjectID) (bool, error) {
+	n, err := s.col.CountDocuments(ctx, bson.M{"_id": id})
+	return n > 0, err
 }
 
 func (s *Service) Match(ctx context.Context, bank, last4 string) (*Card, error) {
@@ -180,42 +198,91 @@ func (s *Service) List(ctx context.Context) ([]Card, error) {
 	return out, cur.All(ctx, &out)
 }
 
-// spent is the net spend on a card since a date: expenses and cash withdrawals, less refunds.
-// Bill payments and EMI debits are not new spends, so they are left out.
-func (s *Service) spent(ctx context.Context, id bson.ObjectID, since time.Time) (net int64, n int, err error) {
-	cur, err := s.txs.Aggregate(ctx, mongo.Pipeline{
-		{{Key: "$match", Value: bson.M{"card_id": id, "occurred_at": bson.M{"$gte": since}, "type": bson.M{"$in": bson.A{"expense", "atm", "refund"}}}}},
-		{{Key: "$group", Value: bson.M{"_id": "$type", "paise": bson.M{"$sum": "$amount_paise"}, "n": bson.M{"$sum": 1}}}},
-	})
-	if err != nil {
-		return 0, 0, err
-	}
-	var rows []struct {
-		Type  string `bson:"_id"`
-		Paise int64  `bson:"paise"`
-		N     int    `bson:"n"`
-	}
-	if err := cur.All(ctx, &rows); err != nil {
-		return 0, 0, err
-	}
-	for _, r := range rows {
-		if r.Type == "refund" {
-			net -= r.Paise
-		} else {
-			net += r.Paise
-		}
-		n += r.N
-	}
-	return net, n, nil
+// sums is one card's money in the running cycle (spent, n, paid) and in the cycle before it (billed).
+// Spend is expenses and cash withdrawals less refunds; EMI debits are not new spends, so they are left out.
+// Paid is bill payments, counted only in the running cycle: one made before the statement date settled an earlier bill.
+type sums struct {
+	spent, billed, paid int64
+	n                   int
 }
 
-// Views lists every card with its cycle spend, limit use and linked loans.
+// cycleSums reads every card's figures in one aggregation, served by the (card_id, occurred_at) index.
+// Cards with a billing and due day look back one extra cycle for their statement.
+func (s *Service) cycleSums(ctx context.Context, cards []Card, now time.Time) (map[bson.ObjectID]*sums, error) {
+	out := map[bson.ObjectID]*sums{}
+	if len(cards) == 0 {
+		return out, nil
+	}
+	var scope bson.A
+	var curStart []bson.M // $switch branches: the cycle start of each card
+	for _, c := range cards {
+		cs := CycleStart(c, now)
+		since := cs
+		if c.BillingDay > 0 && c.DueDay > 0 {
+			since = CycleStart(c, cs.AddDate(0, 0, -1))
+		}
+		// Spends on the card, and payments the user linked to it from a bank account (paid_card_id; their type is card_bill_payment).
+		scope = append(scope,
+			bson.M{"card_id": c.ID, "occurred_at": bson.M{"$gte": since}, "type": bson.M{"$in": bson.A{"expense", "atm", "refund", "card_bill_payment"}}},
+			bson.M{"paid_card_id": c.ID, "occurred_at": bson.M{"$gte": since}})
+		curStart = append(curStart, bson.M{"case": bson.M{"$eq": bson.A{"$_card", c.ID}}, "then": cs})
+		out[c.ID] = &sums{}
+	}
+	cur, err := s.txs.Aggregate(ctx, mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{"$or": scope}}},
+		// a linked payment belongs to the card it paid, whatever account it left
+		{{Key: "$addFields", Value: bson.M{"_card": bson.M{"$ifNull": bson.A{"$paid_card_id", "$card_id"}}}}},
+		{{Key: "$group", Value: bson.M{
+			"_id":   bson.M{"card": "$_card", "type": "$type", "cur": bson.M{"$gte": bson.A{"$occurred_at", bson.M{"$switch": bson.M{"branches": curStart}}}}},
+			"paise": bson.M{"$sum": "$amount_paise"}, "n": bson.M{"$sum": 1},
+		}}},
+	})
+	if err != nil {
+		return nil, err
+	}
+	var rows []struct {
+		ID struct {
+			Card bson.ObjectID `bson:"card"`
+			Type string        `bson:"type"`
+			Cur  bool          `bson:"cur"`
+		} `bson:"_id"`
+		Paise int64 `bson:"paise"`
+		N     int   `bson:"n"`
+	}
+	if err := cur.All(ctx, &rows); err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		t := out[r.ID.Card]
+		switch {
+		case t == nil:
+		case r.ID.Type == "card_bill_payment":
+			if r.ID.Cur {
+				t.paid += r.Paise
+			}
+		default:
+			p := r.Paise
+			if r.ID.Type == "refund" {
+				p = -p
+			}
+			if r.ID.Cur {
+				t.spent, t.n = t.spent+p, t.n+r.N
+			} else {
+				t.billed += p
+			}
+		}
+	}
+	return out, nil
+}
+
+// Views lists every card with its cycle spend, limit use, statement and linked loans: three queries however many cards there are.
 func (s *Service) Views(ctx context.Context, now time.Time) ([]View, error) {
 	cards, err := s.List(ctx)
 	if err != nil {
 		return nil, err
 	}
-	cur, err := s.emis.Find(ctx, bson.M{"cardId": bson.M{"$exists": true}})
+	// Only the fields Compute reads: payment history and statements can be large.
+	cur, err := s.emis.Find(ctx, bson.M{"cardId": bson.M{"$exists": true}}, options.Find().SetProjection(bson.M{"payments": 0, "ledger": 0, "rates": 0}))
 	if err != nil {
 		return nil, err
 	}
@@ -223,19 +290,22 @@ func (s *Service) Views(ctx context.Context, now time.Time) ([]View, error) {
 	if err := cur.All(ctx, &linked); err != nil {
 		return nil, err
 	}
+	byCard := map[bson.ObjectID][]emis.Emi{}
+	for _, e := range linked {
+		if e.CardID != nil {
+			byCard[*e.CardID] = append(byCard[*e.CardID], e)
+		}
+	}
+	tot, err := s.cycleSums(ctx, cards, now)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]View, len(cards))
 	for i, c := range cards {
-		var mine []emis.Emi
-		for _, e := range linked {
-			if e.CardID != nil && *e.CardID == c.ID {
-				mine = append(mine, e)
-			}
-		}
-		spent, n, err := s.spent(ctx, c.ID, CycleStart(c, now))
-		if err != nil {
-			return nil, err
-		}
-		out[i] = Compute(c, spent, n, mine, now)
+		t := tot[c.ID]
+		out[i] = Compute(c, t.spent, t.n, byCard[c.ID], now)
+		out[i].Statement = BuildStatement(c, t.billed, t.paid, now)
+		out[i].AddUnpaidStatement()
 	}
 	ApplyShared(out)
 	return out, nil
