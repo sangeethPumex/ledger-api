@@ -1,0 +1,8 @@
+.git
+.github
+.env
+.env.*
+tmp
+.air.toml
+README.md
+**/*_test.go

@@ -106,6 +106,10 @@ func main() {
 	stocks.RegisterRoutes(mux, stocks.NewController(stockSvc), auth)
 	dashboard.RegisterRoutes(mux, dashboard.NewController(dashSvc), auth)
 
+	// Every endpoint lives under /finance/api, e.g. /finance/api/transactions.
+	root := http.NewServeMux()
+	root.Handle("/finance/api/", http.StripPrefix("/finance/api", mux))
+
 	log.Printf("listening on :%s", port)
-	log.Fatal(http.ListenAndServe(":"+port, mux))
+	log.Fatal(http.ListenAndServe(":"+port, root))
 }

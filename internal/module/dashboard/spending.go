@@ -30,7 +30,7 @@ func levels(days []Day) []SpendDay {
 		out[i] = SpendDay{Day: d}
 		for q := 1; q <= 4 && d.Paise > 0; q++ {
 			out[i].Level = q
-			if d.Paise <= sums[min(len(sums)*q/4, len(sums))-1] {
+			if d.Paise <= sums[max(min(len(sums)*q/4, len(sums))-1, 0)] { // with under 4 busy days the first quartiles fall on the smallest one
 				break
 			}
 		}
