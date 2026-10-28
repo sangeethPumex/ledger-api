@@ -16,11 +16,13 @@ import (
 	"ledger-backend/internal/module/emis"
 	"ledger-backend/internal/module/funds"
 	"ledger-backend/internal/module/profile"
+	"ledger-backend/internal/nim"
 )
 
 // Chatter is the LLM call (nim.Client satisfies it).
 type Chatter interface {
 	Chat(ctx context.Context, system, user string) (string, error)
+	ChatStream(ctx context.Context, system string, msgs []nim.Message, onDelta func(string)) error
 }
 
 type Service struct {

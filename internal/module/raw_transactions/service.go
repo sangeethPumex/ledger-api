@@ -2,6 +2,8 @@ package raw_transactions
 
 import (
 	"context"
+	"log"
+	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -40,6 +42,27 @@ func (s *Service) Pending(ctx context.Context, limit int64) ([]bson.ObjectID, er
 		ids[i] = d.ID
 	}
 	return ids, nil
+}
+
+// WatchInserts calls onInsert for every new raw message, via a MongoDB change stream (needs a replica set / Atlas).
+// It reconnects after errors and calls onInsert once per (re)connect, so anything inserted while the stream was down is caught up.
+func (s *Service) WatchInserts(ctx context.Context, onInsert func()) {
+	pipe := mongo.Pipeline{{{Key: "$match", Value: bson.M{"operationType": "insert"}}}}
+	for ctx.Err() == nil {
+		cs, err := s.col.Watch(ctx, pipe)
+		if err != nil {
+			log.Printf("raw watch: %v", err)
+			time.Sleep(10 * time.Second)
+			continue
+		}
+		onInsert()
+		for cs.Next(ctx) {
+			onInsert()
+		}
+		log.Printf("raw watch ended: %v", cs.Err())
+		cs.Close(context.Background())
+		time.Sleep(5 * time.Second)
+	}
 }
 
 // RetryFailed puts every failed message back in the queue; called once at startup.

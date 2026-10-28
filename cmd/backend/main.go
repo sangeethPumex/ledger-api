@@ -79,18 +79,25 @@ func main() {
 	profSvc := profile.NewService(db)
 	dashSvc := dashboard.NewService(db, accSvc, cardSvc, profSvc, emiSvc, fundSvc, llm)
 
-	// Pick up whatever ledger-api stored; sequential, so one LLM call at a time.
+	// Parse messages as ledger-api inserts them (change stream); sequential, so one LLM call at a time.
+	// The watcher also fires on every (re)connect, which catches up anything missed while we were down.
+	trigger := make(chan struct{}, 1)
+	go rawSvc.WatchInserts(context.Background(), func() {
+		select {
+		case trigger <- struct{}{}:
+		default: // a pass is already queued; it will pick this one up too
+		}
+	})
 	go func() {
 		if n, err := rawSvc.RetryFailed(context.Background()); err != nil {
 			log.Printf("retry failed: %v", err)
 		} else if n > 0 {
 			log.Printf("requeued %d failed messages", n)
 		}
-		for {
+		for range trigger {
 			pctx, pcancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			txSvc.ParsePending(pctx)
 			pcancel()
-			time.Sleep(10 * time.Second)
 		}
 	}()
 
