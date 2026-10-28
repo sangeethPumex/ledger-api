@@ -71,18 +71,16 @@ jobs:
           FULL_IMAGE: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}
           SHA_TAG:    ${{ steps.meta.outputs.sha-tag }}
         run: |
-          # Pull previous image so its layers can be reused as build cache
+          # The repo has immutable tags, so :latest is never re-pushed; it stays a fixed cache seed for the dependency layers.
           # (fails harmlessly on the very first run when the repo is empty)
           docker pull "$FULL_IMAGE:latest" || true
 
           docker build \
             --build-arg BUILDKIT_INLINE_CACHE=1 \
             --tag "$FULL_IMAGE:$SHA_TAG" \
-            --tag "$FULL_IMAGE:latest" \
             --cache-from "$FULL_IMAGE:latest" \
             .
           docker push "$FULL_IMAGE:$SHA_TAG"
-          docker push "$FULL_IMAGE:latest"
 
   deploy:
     name: Deploy to EC2 via SSM (no SSH)
