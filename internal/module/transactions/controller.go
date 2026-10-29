@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
@@ -45,25 +46,18 @@ func (c *Controller) List(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, 200, ts)
 }
 
-// Search is the table's list: POST {page, limit, filter}, where filter takes the same keys as the GET query string (q, category_id,
-// account_id, type, direction, from, to, min, max, owed, needs_review) plus status: review | uncategorised | attention.
+var sortFields = map[string]string{"date": "received_at", "amount": "amount_paise", "vendor": "raw_vendor", "type": "type"}
+
+// Search is the table's list: POST {page, limit, search, sort:{field,dir}, filter}, where filter takes the same keys as the GET query string
+// (q, category_id, account_id, type, direction, from, to, min, max, owed, needs_review) plus status: review | uncategorised | attention.
+// search is the same as filter.q; sort.field is date | amount | vendor | type (default: newest first).
 func (c *Controller) Search(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Page   int64          `json:"page"`
-		Limit  int64          `json:"limit"`
-		Filter map[string]any `json:"filter"`
-	}
+	var req httpx.PageQuery
 	if !httpx.Decode(w, r, &req) {
 		return
 	}
-	if req.Page == 0 {
-		req.Page = 1
-	}
-	if req.Limit == 0 {
-		req.Limit = 50
-	}
-	if req.Page < 1 || req.Page > 100000 || req.Limit < 1 || req.Limit > 200 {
-		httpx.Err(w, 400, "page must be 1 or more and limit 1-200")
+	if msg := req.Check(50, 200); msg != "" {
+		httpx.Err(w, 400, msg)
 		return
 	}
 	v := url.Values{}
@@ -78,8 +72,15 @@ func (c *Controller) Search(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	v.Del("limit")
+	if s := strings.TrimSpace(req.Search); s != "" {
+		v.Set("q", s)
+	}
 	f, msg := ParseFilter(v)
 	if msg != "" {
+		httpx.Err(w, 400, msg)
+		return
+	}
+	if f.Sort, msg = req.SortBy(sortFields, nil); msg != "" {
 		httpx.Err(w, 400, msg)
 		return
 	}
@@ -89,7 +90,7 @@ func (c *Controller) Search(w http.ResponseWriter, r *http.Request) {
 		httpx.Err(w, 500, "could not list transactions")
 		return
 	}
-	httpx.WriteJSON(w, 200, map[string]any{"items": items, "page": req.Page, "limit": req.Limit, "total": total, "pages": (total + req.Limit - 1) / req.Limit})
+	httpx.WriteJSON(w, 200, req.Reply(items, total))
 }
 
 // Patch sets a transaction's category and, for card payments, the card it paid.

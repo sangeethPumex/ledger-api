@@ -139,6 +139,7 @@ func (s *Service) Resync(ctx context.Context) {
 }
 
 func (s *Service) resync(ctx context.Context) error {
+	// Vendors are read once and matched in memory; messages for all review items come in one query; writes go out as one bulk call.
 	vs, err := s.vendors.List(ctx)
 	if err != nil {
 		return err
@@ -151,39 +152,49 @@ func (s *Service) resync(ctx context.Context) error {
 	if err := cur.All(ctx, &pending); err != nil {
 		return err
 	}
-	for _, t := range pending {
-		raw, err := s.raw.Get(ctx, t.RawID)
+	var ops []mongo.WriteModel
+	if len(pending) > 0 && len(vs) > 0 {
+		ids := make([]bson.ObjectID, len(pending))
+		for i, t := range pending {
+			ids[i] = t.RawID
+		}
+		msgs, err := s.raw.Messages(ctx, ids)
 		if err != nil {
 			return err
 		}
-		v, err := s.vendors.Match(ctx, t.RawVendor, t.RawVendor, t.UPIID, raw.Message)
-		if err != nil {
-			return err
-		}
-		if v == nil {
-			continue
-		}
-		set := bson.M{"vendor_id": v.ID, "needs_review": false}
-		if v.CategoryID != nil {
-			set["category_id"] = *v.CategoryID
-		}
-		if _, err := s.col.UpdateByID(ctx, t.ID, bson.M{"$set": set, "$unset": bson.M{"review_reason": ""}}); err != nil {
-			return err
+		for _, t := range pending {
+			v := vendors.MatchIn(vs, t.RawVendor, t.RawVendor, t.UPIID, msgs[t.RawID])
+			if v == nil {
+				continue
+			}
+			set := bson.M{"vendor_id": v.ID, "needs_review": false}
+			if v.CategoryID != nil {
+				set["category_id"] = *v.CategoryID
+			}
+			ops = append(ops, mongo.NewUpdateOneModel().SetFilter(bson.M{"_id": t.ID}).SetUpdate(bson.M{"$set": set, "$unset": bson.M{"review_reason": ""}}))
 		}
 	}
 	for _, v := range vs {
 		if v.CategoryID == nil {
 			continue
 		}
-		if _, err := s.col.UpdateMany(ctx, bson.M{"vendor_id": v.ID, "category_set": bson.M{"$ne": true}}, bson.M{"$set": bson.M{"category_id": *v.CategoryID}}); err != nil {
-			return err
-		}
+		ops = append(ops, mongo.NewUpdateManyModel().
+			SetFilter(bson.M{"vendor_id": v.ID, "category_set": bson.M{"$ne": true}, "category_id": bson.M{"$ne": *v.CategoryID}}). // skip rows already right
+			SetUpdate(bson.M{"$set": bson.M{"category_id": *v.CategoryID}}))
 	}
-	return nil
+	if len(ops) == 0 {
+		return nil
+	}
+	_, err = s.col.BulkWrite(ctx, ops, options.BulkWrite().SetOrdered(true))
+	return err
 }
 
 func (s *Service) List(ctx context.Context, f Filter) ([]Transaction, error) {
-	cur, err := s.col.Find(ctx, f.Query(), options.Find().SetSort(bson.D{{Key: "received_at", Value: -1}, {Key: "occurred_at", Value: -1}, {Key: "_id", Value: -1}}).SetLimit(f.Limit).SetSkip(f.Skip))
+	sort := f.Sort
+	if len(sort) == 0 {
+		sort = bson.D{{Key: "received_at", Value: -1}, {Key: "occurred_at", Value: -1}, {Key: "_id", Value: -1}}
+	}
+	cur, err := s.col.Find(ctx, f.Query(), options.Find().SetSort(sort).SetLimit(f.Limit).SetSkip(f.Skip))
 	if err != nil {
 		return nil, err
 	}
@@ -192,12 +203,20 @@ func (s *Service) List(ctx context.Context, f Filter) ([]Transaction, error) {
 }
 
 // Page is one page of the list plus the number of transactions matching the filter, so the UI can show "page 2 of 9".
+// The count runs while the rows load.
 func (s *Service) Page(ctx context.Context, f Filter, page int64) (items []Transaction, total int64, err error) {
 	f.Skip = (page - 1) * f.Limit
-	if total, err = s.col.CountDocuments(ctx, f.Query()); err != nil {
-		return nil, 0, err
-	}
+	var cerr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		total, cerr = s.col.CountDocuments(ctx, f.Query())
+	}()
 	items, err = s.List(ctx, f)
+	<-done
+	if err == nil {
+		err = cerr
+	}
 	return items, total, err
 }
 

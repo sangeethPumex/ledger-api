@@ -85,3 +85,17 @@ func contains(l []string, s string) bool {
 	}
 	return false
 }
+
+func TestMatchIn(t *testing.T) {
+	a, b := bson.NewObjectID(), bson.NewObjectID()
+	all := []Vendor{{ID: a, Name: "Swiggy", Aliases: []string{"swiggy@icici"}}, {ID: b, Name: "Zomato", Aliases: []string{"zomato"}}}
+	if v := MatchIn(all, "  ZOMATO ", "x"); v == nil || v.ID != b {
+		t.Errorf("by name: %v", v)
+	}
+	if v := MatchIn(all, "", "Paid to SWIGGY@ICICI via UPI"); v == nil || v.ID != a {
+		t.Errorf("by alias in text: %v", v)
+	}
+	if v := MatchIn(all, "Uber", "ride"); v != nil {
+		t.Errorf("unknown matched %v", v)
+	}
+}

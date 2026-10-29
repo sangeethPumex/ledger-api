@@ -3,6 +3,7 @@ package vendors
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -51,6 +52,45 @@ func (c *Controller) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, 200, vs)
+}
+
+var sortFields = map[string]string{"name": "name", "created": "_id"}
+
+// Search is the Vendors page's list: POST {page, limit, search, sort:{field,dir}, filter:{category_id, category}}.
+// sort.field is name | created; filter.category_id is a category id and filter.category is none | set.
+func (c *Controller) Search(w http.ResponseWriter, r *http.Request) {
+	var req httpx.PageQuery
+	if !httpx.Decode(w, r, &req) {
+		return
+	}
+	if msg := req.Check(10, 100); msg != "" {
+		httpx.Err(w, 400, msg)
+		return
+	}
+	sort, msg := req.SortBy(sortFields, bson.D{{Key: "name", Value: 1}, {Key: "_id", Value: 1}})
+	if msg != "" {
+		httpx.Err(w, 400, msg)
+		return
+	}
+	f := PageFilter{Search: strings.TrimSpace(req.Search)}
+	if s, _ := req.Filter["category_id"].(string); s != "" {
+		id, err := bson.ObjectIDFromHex(s)
+		if err != nil {
+			httpx.Err(w, 400, "category_id is not a valid id")
+			return
+		}
+		f.CategoryID = &id
+	}
+	if f.Category, _ = req.Filter["category"].(string); f.Category != "" && f.Category != "none" && f.Category != "set" {
+		httpx.Err(w, 400, "category must be none or set")
+		return
+	}
+	items, total, err := c.svc.Page(r.Context(), f, sort, req.Skip(), req.Limit)
+	if err != nil {
+		c.fail(w, err, "list vendors")
+		return
+	}
+	httpx.WriteJSON(w, 200, req.Reply(items, total))
 }
 
 func (c *Controller) Update(w http.ResponseWriter, r *http.Request) {

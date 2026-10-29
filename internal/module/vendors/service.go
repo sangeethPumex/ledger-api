@@ -3,6 +3,7 @@ package vendors
 import (
 	"context"
 	"errors"
+	"regexp"
 	"strings"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -166,6 +167,53 @@ func (s *Service) List(ctx context.Context) ([]Vendor, error) {
 	return out, cur.All(ctx, &out)
 }
 
+// PageFilter narrows a vendor page. Zero values mean "any".
+type PageFilter struct {
+	Search     string
+	CategoryID *bson.ObjectID
+	// Category: "" any, "none" only vendors without one, "set" only vendors with one. Ignored when CategoryID is set.
+	Category string
+}
+
+func (f PageFilter) query() bson.M {
+	q := bson.M{}
+	if f.Search != "" {
+		re := bson.Regex{Pattern: regexp.QuoteMeta(f.Search), Options: "i"}
+		q["$or"] = bson.A{bson.M{"name": re}, bson.M{"aliases": re}}
+	}
+	switch {
+	case f.CategoryID != nil:
+		q["category_id"] = *f.CategoryID
+	case f.Category == "none":
+		q["category_id"] = bson.M{"$exists": false}
+	case f.Category == "set":
+		q["category_id"] = bson.M{"$exists": true}
+	}
+	return q
+}
+
+// Page is one page of vendors plus the number matching the filter. The count runs while the rows load.
+func (s *Service) Page(ctx context.Context, f PageFilter, sort bson.D, skip, limit int64) ([]Vendor, int64, error) {
+	q := f.query()
+	var total int64
+	var cerr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		total, cerr = s.col.CountDocuments(ctx, q)
+	}()
+	out := []Vendor{}
+	cur, err := s.col.Find(ctx, q, options.Find().SetSort(sort).SetSkip(skip).SetLimit(limit).SetCollation(&options.Collation{Locale: "en", Strength: 2}))
+	if err == nil {
+		err = cur.All(ctx, &out)
+	}
+	<-done
+	if err == nil {
+		err = cerr
+	}
+	return out, total, err
+}
+
 // Match returns the first vendor whose name equals name or whose alias occurs
 // in any of texts. nil means unknown. A short alias matches broadly, so use
 // specific ones (a full UPI id, not "ola").
@@ -174,19 +222,28 @@ func (s *Service) Match(ctx context.Context, name string, texts ...string) (*Ven
 	if err != nil {
 		return nil, err
 	}
+	return MatchIn(all, name, texts...), nil
+}
+
+// MatchIn is Match over vendors already loaded, so a batch of transactions reads the vendors once instead of once each. Pure.
+func MatchIn(all []Vendor, name string, texts ...string) *Vendor {
 	name = Normalize(name)
+	lower := make([]string, len(texts))
+	for i, t := range texts {
+		lower[i] = strings.ToLower(t)
+	}
 	for i := range all {
 		v := &all[i]
 		if name != "" && Normalize(v.Name) == name {
-			return v, nil
+			return v
 		}
 		for _, a := range v.Aliases {
-			for _, t := range texts {
-				if strings.Contains(strings.ToLower(t), a) {
-					return v, nil
+			for _, t := range lower {
+				if strings.Contains(t, a) {
+					return v
 				}
 			}
 		}
 	}
-	return nil, nil
+	return nil
 }

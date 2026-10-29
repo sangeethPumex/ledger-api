@@ -24,6 +24,26 @@ func (s *Service) Get(ctx context.Context, id bson.ObjectID) (*RawTransaction, e
 	return &rt, nil
 }
 
+// Messages returns the message text of each id in one query, keyed by id. Ids with no message are left out.
+func (s *Service) Messages(ctx context.Context, ids []bson.ObjectID) (map[bson.ObjectID]string, error) {
+	cur, err := s.col.Find(ctx, bson.M{"_id": bson.M{"$in": ids}}, options.Find().SetProjection(bson.M{"message": 1}))
+	if err != nil {
+		return nil, err
+	}
+	var docs []struct {
+		ID      bson.ObjectID `bson:"_id"`
+		Message string        `bson:"message"`
+	}
+	if err := cur.All(ctx, &docs); err != nil {
+		return nil, err
+	}
+	out := make(map[bson.ObjectID]string, len(docs))
+	for _, d := range docs {
+		out[d.ID] = d.Message
+	}
+	return out, nil
+}
+
 // Pending returns the oldest unparsed message ids, oldest first.
 func (s *Service) Pending(ctx context.Context, limit int64) ([]bson.ObjectID, error) {
 	cur, err := s.col.Find(ctx, bson.M{"status": StatusPending},

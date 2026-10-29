@@ -26,6 +26,8 @@ type Filter struct {
 	Status string
 	Limit  int64
 	Skip   int64
+	// Sort overrides the default newest-first order; empty keeps it.
+	Sort bson.D
 }
 
 // Query is the Mongo filter for f. Pure.

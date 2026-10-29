@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"ledger-backend/internal/httpx"
@@ -42,6 +43,31 @@ func (c *Controller) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, 200, cats)
+}
+
+var sortFields = map[string]string{"name": "name", "created": "_id"}
+
+// Search is the Categories page's list: POST {page, limit, search, sort:{field,dir}}. sort.field is name | created.
+func (c *Controller) Search(w http.ResponseWriter, r *http.Request) {
+	var req httpx.PageQuery
+	if !httpx.Decode(w, r, &req) {
+		return
+	}
+	if msg := req.Check(10, 100); msg != "" {
+		httpx.Err(w, 400, msg)
+		return
+	}
+	sort, msg := req.SortBy(sortFields, bson.D{{Key: "name", Value: 1}, {Key: "_id", Value: 1}})
+	if msg != "" {
+		httpx.Err(w, 400, msg)
+		return
+	}
+	items, total, err := c.svc.Page(r.Context(), strings.TrimSpace(req.Search), sort, req.Skip(), req.Limit)
+	if err != nil {
+		httpx.Err(w, 500, "could not list categories")
+		return
+	}
+	httpx.WriteJSON(w, 200, req.Reply(items, total))
 }
 
 func (c *Controller) Update(w http.ResponseWriter, r *http.Request) {

@@ -2,6 +2,7 @@ package categories
 
 import (
 	"context"
+	"regexp"
 	"strings"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -49,6 +50,31 @@ func (s *Service) Rename(ctx context.Context, id bson.ObjectID, name string) err
 		return mongo.ErrNoDocuments
 	}
 	return err
+}
+
+// Page is one page of categories whose name contains search (any case), plus the number matching. The count runs while the rows load.
+func (s *Service) Page(ctx context.Context, search string, sort bson.D, skip, limit int64) ([]Category, int64, error) {
+	q := bson.M{}
+	if search != "" {
+		q["name"] = bson.Regex{Pattern: regexp.QuoteMeta(search), Options: "i"}
+	}
+	var total int64
+	var cerr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		total, cerr = s.col.CountDocuments(ctx, q)
+	}()
+	out := []Category{}
+	cur, err := s.col.Find(ctx, q, options.Find().SetSort(sort).SetSkip(skip).SetLimit(limit).SetCollation(&options.Collation{Locale: "en", Strength: 2}))
+	if err == nil {
+		err = cur.All(ctx, &out)
+	}
+	<-done
+	if err == nil {
+		err = cerr
+	}
+	return out, total, err
 }
 
 func (s *Service) List(ctx context.Context) ([]Category, error) {
