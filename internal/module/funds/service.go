@@ -90,7 +90,8 @@ func (s *Service) get(ctx context.Context, id bson.ObjectID) (*Fund, error) {
 	return &f, s.col.FindOne(ctx, bson.M{"_id": id}).Decode(&f)
 }
 
-func (s *Service) all(ctx context.Context) ([]Fund, error) {
+// All lists every fund, exited ones too, by name.
+func (s *Service) All(ctx context.Context) ([]Fund, error) {
 	cur, err := s.col.Find(ctx, bson.D{}, options.Find().SetSort(bson.D{{Key: "name", Value: 1}}))
 	if err != nil {
 		return nil, err
@@ -100,7 +101,7 @@ func (s *Service) all(ctx context.Context) ([]Fund, error) {
 }
 
 func (s *Service) List(ctx context.Context, now time.Time) ([]View, error) {
-	fs, err := s.all(ctx)
+	fs, err := s.All(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -198,7 +199,7 @@ func (s *Service) RecordGeniusSip(ctx context.Context) (ok bool, err error) {
 	if err != nil || g == nil {
 		return false, err
 	}
-	all, err := s.all(ctx)
+	all, err := s.All(ctx)
 	if err != nil {
 		return false, err
 	}
@@ -271,7 +272,7 @@ func (s *Service) RecordSip(ctx context.Context, id bson.ObjectID) (ok bool, err
 
 // Refresh fetches the latest NAV for every fund; a fund whose lookup fails keeps its old NAV.
 func (s *Service) Refresh(ctx context.Context) error {
-	fs, err := s.all(ctx)
+	fs, err := s.All(ctx)
 	if err != nil {
 		return err
 	}
@@ -392,7 +393,7 @@ func (s *Service) Summary(ctx context.Context, now time.Time) (*Summary, error) 
 		return nil, err
 	}
 	out := &Summary{ByType: []Slice{}, ByPlatform: []Slice{}, Sips: []SipBrief{}}
-	all, err := s.all(ctx)
+	all, err := s.All(ctx)
 	if err != nil {
 		return nil, err
 	}

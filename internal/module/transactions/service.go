@@ -51,6 +51,11 @@ func NewService(ctx context.Context, db *mongo.Database, raw *raw_transactions.S
 	if err == nil {
 		err = backfillReceivedAt(ctx, db, col)
 	}
+	if err == nil {
+		if cp, cerr := c.CardPaymentsID(ctx); cerr == nil {
+			err = backfillCardPayments(ctx, col, cp)
+		}
+	}
 	return &Service{col: col, raw: raw, vendors: v, categories: c, accounts: acc, cards: cd, llm: llm, model: model}, err
 }
 
@@ -109,6 +114,12 @@ func (s *Service) Parse(ctx context.Context, rawID bson.ObjectID) error {
 				id := c.ID
 				t.SuggestedCategoryID = &id
 			}
+		}
+	}
+	if t.Type == "card_bill_payment" && t.Direction != "credit" && t.CategoryID == nil {
+		// Under "Credit card payments", the transaction row asks which card it paid; picking one links it to that card.
+		if id, err := s.categories.CardPaymentsID(ctx); err == nil {
+			t.CategoryID = &id
 		}
 	}
 	// Link to a known bank account or card by last4; unknown ones stay unlinked and are linked when created.

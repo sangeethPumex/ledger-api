@@ -3,6 +3,7 @@ package dashboard
 import (
 	"context"
 	"errors"
+	"log"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -10,6 +11,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"ledger-backend/internal/ist"
+	"ledger-backend/internal/module/snapshots"
 )
 
 // monthDoc is one row of the `networth` collection, keyed by IST month ("2026-09"). The current month's row is rewritten on every
@@ -97,6 +99,26 @@ func (s *Service) lastMonthChange(ctx context.Context, now time.Time, current in
 	return current - m.NetWorth, m.Date, err == nil, err
 }
 
+// UseSnapshots makes net-worth history read the daily snapshot rows.
+func (s *Service) UseSnapshots(sn *snapshots.Service) { s.snaps = sn }
+
+// dailyPoints is one point per day from the snapshot table; nil when there is none (or no table yet), so the month rows alone are used.
+func (s *Service) dailyPoints(ctx context.Context, from, to string) []NWPoint {
+	if s.snaps == nil {
+		return nil
+	}
+	rows, err := s.snaps.Range(ctx, from, to)
+	if err != nil {
+		log.Printf("dashboard: snapshots: %v", err)
+		return nil
+	}
+	out := make([]NWPoint, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, NWPoint{Date: r.Date, NetWorth: r.NetWorth, Owed: r.Owed, Cash: ptr(r.Cash), Investments: ptr(r.Investments)})
+	}
+	return out
+}
+
 func ptr(v int64) *int64 { return &v }
 
 func newPoint(date string, cash, inv, owed int64) NWPoint {
@@ -163,9 +185,14 @@ func (s *Service) NetWorth(ctx context.Context, months int, now time.Time) (*Net
 		return nil, err
 	}
 	hist := make([]NWPoint, 0, len(docs))
+	daily := s.dailyPoints(ctx, start+"-01", t.Format("2006-01-02"))
 	for _, m := range docs {
+		if len(daily) > 0 && m.Date >= daily[0].Date {
+			break // the daily rows take over from the first day they cover
+		}
 		hist = append(hist, NWPoint{Date: m.Date, NetWorth: m.NetWorth, Owed: m.Owed, Cash: m.Cash, Investments: m.Investments})
 	}
+	hist = append(hist, daily...)
 	setChanges(hist, 0)
 	if len(hist) > 0 {
 		hist[0].Change = 0

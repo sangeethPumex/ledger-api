@@ -19,6 +19,7 @@ import (
 	"ledger-backend/internal/module/funds"
 	"ledger-backend/internal/module/mandates"
 	"ledger-backend/internal/module/profile"
+	"ledger-backend/internal/module/snapshots"
 	"ledger-backend/internal/module/stocks"
 	"ledger-backend/internal/nim"
 )
@@ -40,6 +41,7 @@ type Service struct {
 	stocks   *stocks.Service
 	mandates *mandates.Service
 	llm      Chatter
+	snaps    *snapshots.Service // daily rows; nil in tests
 	chats    *mongo.Collection // saved AI conversations, owned here
 
 	sumMu sync.Mutex
@@ -156,6 +158,49 @@ func (s *Service) aggregate(ctx context.Context, from, to time.Time) ([]flowDoc,
 		return nil, nil, err
 	}
 	return res[0].Flows, res[0].Daily, nil
+}
+
+// cardPayments sums the bill payments (type card_bill_payment, money going out) of a window, with the biggest ones. nil when there are none.
+// They are left out of aggregate on purpose: the card purchases they settle are counted as spending already.
+func (s *Service) cardPayments(ctx context.Context, from, to time.Time, n names) (*Flow, error) {
+	cur, err := s.txs.Aggregate(ctx, mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{"occurred_at": bson.M{"$gte": from.UTC(), "$lt": to.UTC()}, "type": "card_bill_payment", "direction": bson.M{"$ne": "credit"}}}},
+		{{Key: "$group", Value: bson.M{
+			"_id": nil, "paise": bson.M{"$sum": "$amount_paise"}, "count": bson.M{"$sum": 1},
+			"txns": bson.M{"$topN": bson.M{"n": 8, "sortBy": bson.M{"amount_paise": -1},
+				"output": bson.M{"id": "$_id", "paid": "$paid_card_id", "raw": "$raw_vendor", "at": bson.M{"$ifNull": bson.A{"$received_at", "$occurred_at"}}, "paise": "$amount_paise", "acc": "$account_id", "card": "$card_id"}}},
+		}}},
+	})
+	if err != nil {
+		return nil, err
+	}
+	var res []struct {
+		Paise int64 `bson:"paise"`
+		Count int   `bson:"count"`
+		Txns  []struct {
+			ID    bson.ObjectID  `bson:"id"`
+			Paid  *bson.ObjectID `bson:"paid"`
+			Raw   string         `bson:"raw"`
+			At    time.Time      `bson:"at"`
+			Paise int64          `bson:"paise"`
+			Acc   *bson.ObjectID `bson:"acc"`
+			Card  *bson.ObjectID `bson:"card"`
+		} `bson:"txns"`
+	}
+	if err := cur.All(ctx, &res); err != nil || len(res) == 0 {
+		return nil, err
+	}
+	f := &Flow{ID: "out-card-payments", Name: "Credit card payments", Tone: "card", Paise: res[0].Paise, Count: res[0].Count, Txns: make([]TxnView, 0, len(res[0].Txns))}
+	for _, t := range res[0].Txns {
+		label := t.Raw
+		if t.Paid != nil && n.card[*t.Paid] != "" {
+			label = n.card[*t.Paid] // the card it paid, when linked
+		} else if label == "" {
+			label = "Card bill (card not chosen)"
+		}
+		f.Txns = append(f.Txns, TxnView{ID: t.ID.Hex(), Vendor: label, Source: n.source(t.Acc, t.Card), At: t.At.UTC().Format(time.RFC3339), Paise: t.Paise})
+	}
+	return f, nil
 }
 
 type names struct{ acc, card map[bson.ObjectID]string }
@@ -367,6 +412,9 @@ func (s *Service) Get(ctx context.Context, r Range, key string, now time.Time) (
 	}
 	cf := buildCashflow(n.flows(flowDocs, "in"), n.flows(flowDocs, "out"), earlierIncome, earlierSpent)
 	cf.Daily = fillDays(periodDays, r, now)
+	if cf.CardPayments, err = s.cardPayments(ctx, r.From, r.To, n); err != nil {
+		return nil, err
+	}
 
 	var cash int64
 	for _, a := range accs {

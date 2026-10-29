@@ -64,6 +64,9 @@ type Cashflow struct {
 	Dests        []Flow   `json:"dests"`
 	Daily        []Day    `json:"daily"`
 	EarlierSpent int64    `json:"earlierSpentPaise"` // before Catalyst, already included above
+	// CardPayments is what was paid toward credit card bills in the period. The purchases it settles are already in Spent, so it is shown
+	// beside the flow and never added to any total.
+	CardPayments *Flow `json:"cardPayments,omitempty"`
 }
 
 func classify(name string) string {

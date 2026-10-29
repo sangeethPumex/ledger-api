@@ -23,6 +23,7 @@ import (
 	"ledger-backend/internal/module/mandates"
 	"ledger-backend/internal/module/profile"
 	"ledger-backend/internal/module/raw_transactions"
+	"ledger-backend/internal/module/snapshots"
 	"ledger-backend/internal/module/stocks"
 	"ledger-backend/internal/module/transactions"
 	"ledger-backend/internal/module/vendors"
@@ -88,6 +89,11 @@ func main() {
 	viewSvc, err := views.NewService(ctx, db)
 	check(err)
 	dashSvc := dashboard.NewService(db, accSvc, cardSvc, profSvc, emiSvc, fundSvc, stockSvc, mandSvc, chatLLM)
+	snapSvc, err := snapshots.NewService(ctx, db, accSvc, cardSvc, emiSvc, fundSvc, stockSvc, profSvc)
+	check(err)
+	dashSvc.UseSnapshots(snapSvc)
+	// One row per day (balances, holdings, net worth, spending): fills the past from the transactions, then keeps today's row live.
+	go snapSvc.Run(context.Background(), 15*time.Minute)
 
 	// Parse messages as ledger-api inserts them (change stream); sequential, so one LLM call at a time.
 	// The watcher also fires on every (re)connect, which catches up anything missed while we were down.
@@ -126,6 +132,7 @@ func main() {
 	budgets.RegisterRoutes(mux, budgets.NewController(budSvc), auth)
 	insights.RegisterRoutes(mux, insights.NewController(insights.NewService(db)), auth)
 	views.RegisterRoutes(mux, views.NewController(viewSvc), auth)
+	snapshots.RegisterRoutes(mux, snapshots.NewController(snapSvc), auth)
 
 	// Every endpoint lives under /finance/api, e.g. /finance/api/transactions.
 	root := http.NewServeMux()

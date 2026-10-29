@@ -10,6 +10,18 @@ import (
 	"ledger-backend/internal/module/raw_transactions"
 )
 
+// backfillCardPayments files bill payments parsed before they got a category under "Credit card payments", so they show the card picker.
+// Only payments with neither a category nor a card are touched; idempotent.
+func backfillCardPayments(ctx context.Context, col *mongo.Collection, cp bson.ObjectID) error {
+	_, err := col.UpdateMany(ctx,
+		bson.M{"type": "card_bill_payment", "direction": bson.M{"$ne": "credit"}, "category_id": bson.M{"$exists": false}, "paid_card_id": bson.M{"$exists": false}},
+		bson.M{"$set": bson.M{"category_id": cp}})
+	if err != nil {
+		log.Printf("backfill card payments: %v", err)
+	}
+	return nil // must not stop the server
+}
+
 // backfillReceivedAt gives transactions parsed before received_at existed the arrival time of their raw message, in one aggregation.
 // Idempotent: only documents still missing the field are touched.
 func backfillReceivedAt(ctx context.Context, db *mongo.Database, col *mongo.Collection) error {

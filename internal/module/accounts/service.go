@@ -162,33 +162,45 @@ func (s *Service) Match(ctx context.Context, bank, last4 string) (*Account, erro
 	return nil, nil
 }
 
-// List returns accounts with balances: opening balance plus every linked transaction that arrived after it, credits adding and debits taking away.
-// Arrival time (received_at) decides what counts, not the date in the SMS, which has no time of day and would drop same-day transactions.
-// Direction decides the sign; older rows without it fall back to type.
-func (s *Service) List(ctx context.Context) ([]View, error) {
+// Raw lists the accounts without balances, by name.
+func (s *Service) Raw(ctx context.Context) ([]Account, error) {
 	cur, err := s.col.Find(ctx, bson.D{}, options.Find().SetSort(bson.D{{Key: "name", Value: 1}}))
 	if err != nil {
 		return nil, err
 	}
 	var accs []Account
-	if err := cur.All(ctx, &accs); err != nil {
+	return accs, cur.All(ctx, &accs)
+}
+
+// SignedExpr is the Mongo expression for what a transaction does to its account: credits add, debits take away. Direction decides the
+// sign; older rows without it fall back to type. Shared by the live balance and the daily snapshots so the two always agree.
+func SignedExpr() bson.M {
+	neg := bson.M{"$multiply": bson.A{"$amount_paise", -1}}
+	return bson.M{"$switch": bson.M{
+		"branches": bson.A{
+			bson.M{"case": bson.M{"$eq": bson.A{"$direction", "credit"}}, "then": "$amount_paise"},
+			bson.M{"case": bson.M{"$eq": bson.A{"$direction", "debit"}}, "then": neg},
+			bson.M{"case": bson.M{"$in": bson.A{"$type", bson.A{"income", "refund"}}}, "then": "$amount_paise"},
+			bson.M{"case": bson.M{"$in": bson.A{"$type", bson.A{"expense", "atm", "emi", "card_bill_payment"}}}, "then": neg},
+		},
+		"default": 0,
+	}}
+}
+
+// List returns accounts with balances: opening balance plus every linked transaction that arrived after it, credits adding and debits taking away.
+// Arrival time (received_at) decides what counts, not the date in the SMS, which has no time of day and would drop same-day transactions.
+// Direction decides the sign; older rows without it fall back to type.
+func (s *Service) List(ctx context.Context) ([]View, error) {
+	accs, err := s.Raw(ctx)
+	if err != nil {
 		return nil, err
 	}
-	neg := bson.M{"$multiply": bson.A{"$amount_paise", -1}}
 	out := make([]View, len(accs))
 	for i, a := range accs {
 		out[i] = View{Account: a, BalancePaise: a.OpeningBalancePaise}
 		c, err := s.txs.Aggregate(ctx, mongo.Pipeline{
 			{{Key: "$match", Value: bson.M{"account_id": a.ID, "$expr": bson.M{"$gte": bson.A{bson.M{"$ifNull": bson.A{"$received_at", "$occurred_at"}}, a.OpeningAt}}}}},
-			{{Key: "$group", Value: bson.M{"_id": nil, "net": bson.M{"$sum": bson.M{"$switch": bson.M{
-				"branches": bson.A{
-					bson.M{"case": bson.M{"$eq": bson.A{"$direction", "credit"}}, "then": "$amount_paise"},
-					bson.M{"case": bson.M{"$eq": bson.A{"$direction", "debit"}}, "then": neg},
-					bson.M{"case": bson.M{"$in": bson.A{"$type", bson.A{"income", "refund"}}}, "then": "$amount_paise"},
-					bson.M{"case": bson.M{"$in": bson.A{"$type", bson.A{"expense", "atm", "emi", "card_bill_payment"}}}, "then": neg},
-				},
-				"default": 0,
-			}}}}}},
+			{{Key: "$group", Value: bson.M{"_id": nil, "net": bson.M{"$sum": SignedExpr()}}}},
 		})
 		if err != nil {
 			return nil, err

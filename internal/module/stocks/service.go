@@ -20,7 +20,8 @@ func NewService(db *mongo.Database, prices PriceProvider) *Service {
 	return &Service{col: db.Collection(Collection), quotes: db.Collection(QuoteCollection), prices: prices}
 }
 
-func (s *Service) lots(ctx context.Context) ([]Lot, error) {
+// Lots lists every purchase, oldest first.
+func (s *Service) Lots(ctx context.Context) ([]Lot, error) {
 	cur, err := s.col.Find(ctx, bson.D{}, options.Find().SetSort(bson.D{{Key: "buyDate", Value: 1}}))
 	if err != nil {
 		return nil, err
@@ -32,7 +33,7 @@ func (s *Service) lots(ctx context.Context) ([]Lot, error) {
 // Portfolio values every lot. Only missing or stale symbols hit the provider, in one batch; if it fails,
 // the last cached quote is used and flagged stale instead of returning an error.
 func (s *Service) Portfolio(ctx context.Context, now time.Time) (*Portfolio, error) {
-	lots, err := s.lots(ctx)
+	lots, err := s.Lots(ctx)
 	if err != nil {
 		return nil, err
 	}
