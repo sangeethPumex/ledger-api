@@ -26,7 +26,7 @@ var carLedger = []Period{
 // ponytail: tenure (84) is worked out from the amount and 7.70%; confirm it with the lender.
 func (s *Service) seedCarLoan(ctx context.Context) error {
 	var e Emi
-	err := s.col.FindOne(ctx, bson.M{"kind": "loan", "name": bson.M{"$regex": "car", "$options": "i"}}).Decode(&e)
+	err := s.col.FindOne(ctx, bson.M{"kind": "loan", "name": bson.M{"$regex": "car|kia|sonet", "$options": "i"}}).Decode(&e)
 	switch {
 	case errors.Is(err, mongo.ErrNoDocuments):
 		e = Emi{ID: bson.NewObjectID(), Name: "Car Loan", Kind: "loan"}

@@ -42,6 +42,11 @@ func NewService(ctx context.Context, db *mongo.Database, raw *raw_transactions.S
 		{Keys: bson.D{{Key: "needs_review", Value: 1}, {Key: "occurred_at", Value: -1}}},
 		{Keys: bson.D{{Key: "occurred_at", Value: -1}}},
 		{Keys: bson.D{{Key: "received_at", Value: -1}}},
+		// Budgets, merchant merge and insights read by category / vendor over a time window.
+		{Keys: bson.D{{Key: "category_id", Value: 1}, {Key: "occurred_at", Value: -1}}},
+		{Keys: bson.D{{Key: "vendor_id", Value: 1}, {Key: "occurred_at", Value: -1}}},
+		// Only the few payments someone owes back: the Owed page and its filter skip the rest of the collection.
+		{Keys: bson.D{{Key: "owed_paise", Value: 1}}, Options: options.Index().SetPartialFilterExpression(bson.M{"owed_paise": bson.M{"$gt": 0}})},
 	})
 	if err == nil {
 		err = backfillReceivedAt(ctx, db, col)
@@ -262,7 +267,11 @@ func (s *Service) Summary(ctx context.Context) (*Summary, error) {
 		}
 		if spend {
 			out.SpentPaise += amt
-			if t.CategoryID != nil {
+			if len(t.Splits) > 0 {
+				for _, sp := range t.Splits {
+					cats[sp.CategoryID] += sp.Paise
+				}
+			} else if t.CategoryID != nil {
 				cats[*t.CategoryID] += amt
 			} else {
 				uncategorised += amt

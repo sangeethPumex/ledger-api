@@ -14,16 +14,19 @@ import (
 	"ledger-backend/internal/middleware"
 	"ledger-backend/internal/module/accounts"
 	"ledger-backend/internal/module/cards"
+	"ledger-backend/internal/module/budgets"
 	"ledger-backend/internal/module/categories"
 	"ledger-backend/internal/module/dashboard"
 	"ledger-backend/internal/module/emis"
 	"ledger-backend/internal/module/funds"
+	"ledger-backend/internal/module/insights"
 	"ledger-backend/internal/module/mandates"
 	"ledger-backend/internal/module/profile"
 	"ledger-backend/internal/module/raw_transactions"
 	"ledger-backend/internal/module/stocks"
 	"ledger-backend/internal/module/transactions"
 	"ledger-backend/internal/module/vendors"
+	"ledger-backend/internal/module/views"
 	"ledger-backend/internal/nim"
 )
 
@@ -80,7 +83,11 @@ func main() {
 	stockSvc := stocks.NewService(db, stocks.NewYahoo(yahooURL))
 	profSvc := profile.NewService(db)
 	mandSvc := mandates.NewService(db)
-	dashSvc := dashboard.NewService(db, accSvc, cardSvc, profSvc, emiSvc, fundSvc, mandSvc, chatLLM)
+	budSvc, err := budgets.NewService(ctx, db)
+	check(err)
+	viewSvc, err := views.NewService(ctx, db)
+	check(err)
+	dashSvc := dashboard.NewService(db, accSvc, cardSvc, profSvc, emiSvc, fundSvc, stockSvc, mandSvc, chatLLM)
 
 	// Parse messages as ledger-api inserts them (change stream); sequential, so one LLM call at a time.
 	// The watcher also fires on every (re)connect, which catches up anything missed while we were down.
@@ -116,6 +123,9 @@ func main() {
 	funds.RegisterRoutes(mux, funds.NewController(fundSvc), auth)
 	stocks.RegisterRoutes(mux, stocks.NewController(stockSvc), auth)
 	dashboard.RegisterRoutes(mux, dashboard.NewController(dashSvc), auth)
+	budgets.RegisterRoutes(mux, budgets.NewController(budSvc), auth)
+	insights.RegisterRoutes(mux, insights.NewController(insights.NewService(db)), auth)
+	views.RegisterRoutes(mux, views.NewController(viewSvc), auth)
 
 	// Every endpoint lives under /finance/api, e.g. /finance/api/transactions.
 	root := http.NewServeMux()

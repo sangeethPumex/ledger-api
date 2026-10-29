@@ -11,12 +11,14 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"ledger-backend/internal/ist"
+	"ledger-backend/internal/spend"
 	"ledger-backend/internal/module/accounts"
 	"ledger-backend/internal/module/cards"
 	"ledger-backend/internal/module/emis"
 	"ledger-backend/internal/module/funds"
 	"ledger-backend/internal/module/mandates"
 	"ledger-backend/internal/module/profile"
+	"ledger-backend/internal/module/stocks"
 	"ledger-backend/internal/nim"
 )
 
@@ -34,12 +36,13 @@ type Service struct {
 	profile  *profile.Service
 	emis     *emis.Service
 	funds    *funds.Service
+	stocks   *stocks.Service
 	mandates *mandates.Service
 	llm      Chatter
 }
 
-func NewService(db *mongo.Database, a *accounts.Service, c *cards.Service, p *profile.Service, e *emis.Service, f *funds.Service, m *mandates.Service, llm Chatter) *Service {
-	s := &Service{txs: db.Collection("transactions"), months: db.Collection("networth"), accounts: a, cards: c, profile: p, emis: e, funds: f, mandates: m, llm: llm}
+func NewService(db *mongo.Database, a *accounts.Service, c *cards.Service, p *profile.Service, e *emis.Service, f *funds.Service, st *stocks.Service, m *mandates.Service, llm Chatter) *Service {
+	s := &Service{txs: db.Collection("transactions"), months: db.Collection("networth"), accounts: a, cards: c, profile: p, emis: e, funds: f, stocks: st, mandates: m, llm: llm}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := s.seed(ctx); err != nil {
@@ -90,13 +93,16 @@ func (s *Service) aggregate(ctx context.Context, from, to time.Time) ([]flowDoc,
 				bson.M{"type": bson.M{"$in": bson.A{"expense", "atm", "emi"}}, "direction": bson.M{"$ne": "credit"}},
 			},
 		}}},
-		// The part of a payment a friend owes back is not the user's spend; everything below sees only the rest.
-		{{Key: "$addFields", Value: bson.M{"amount_paise": bson.M{"$subtract": bson.A{"$amount_paise", bson.M{"$ifNull": bson.A{"$owed_paise", 0}}}}}}},
-		{{Key: "$match", Value: bson.M{"amount_paise": bson.M{"$gt": 0}}}},
+	}
+	// The part a friend owes back is not the user's spend, and a split payment counts once per category; everything below sees only that.
+	pipe = append(pipe, spend.Parts()...)
+	pipe = append(pipe, mongo.Pipeline{
 		{{Key: "$lookup", Value: bson.M{"from": "categories", "localField": "category_id", "foreignField": "_id", "as": "cat"}}},
+		{{Key: "$lookup", Value: bson.M{"from": "vendors", "localField": "vendor_id", "foreignField": "_id", "as": "ven"}}},
 		{{Key: "$addFields", Value: bson.M{
-			"_dir":   bson.M{"$cond": bson.A{bson.M{"$eq": bson.A{"$type", "income"}}, "in", "out"}},
-			"_label": bson.M{"$cond": bson.A{nonEmpty("$raw_vendor"), "$raw_vendor", bson.M{"$cond": bson.A{nonEmpty("$upi_id"), "$upi_id", "Unknown"}}}},
+			"_dir": bson.M{"$cond": bson.A{bson.M{"$eq": bson.A{"$type", "income"}}, "in", "out"}},
+			// A saved vendor's name beats the raw SMS payee / UPI id.
+			"_label": bson.M{"$ifNull": bson.A{bson.M{"$first": "$ven.name"}, bson.M{"$cond": bson.A{nonEmpty("$raw_vendor"), "$raw_vendor", bson.M{"$cond": bson.A{nonEmpty("$upi_id"), "$upi_id", "Unknown"}}}}}},
 			"_cat":   bson.M{"$ifNull": bson.A{bson.M{"$first": "$cat.name"}, "Uncategorised"}},
 		}}},
 		{{Key: "$addFields", Value: bson.M{"_name": bson.M{"$switch": bson.M{
@@ -125,7 +131,7 @@ func (s *Service) aggregate(ctx context.Context, from, to time.Time) ([]flowDoc,
 				bson.M{"$sort": bson.M{"_id": 1}},
 			},
 		}}},
-	}
+	}...)
 	cur, err := s.txs.Aggregate(ctx, pipe)
 	if err != nil {
 		return nil, nil, err
@@ -359,8 +365,13 @@ func (s *Service) Get(ctx context.Context, r Range, key string, now time.Time) (
 	if pos.UsesFunds {
 		mfInvested, mfCurrent = paise(fundSum.Invested), paise(fundSum.Value)
 	}
-	pos.Invested = mfInvested + paise(prof.Stocks.Invested) + paise(prof.Other.Invested)
-	pos.Current = mfCurrent + paise(prof.Stocks.Current) + paise(prof.Other.Current)
+	port, err := s.stocks.Portfolio(ctx, now)
+	if err != nil {
+		return nil, err
+	}
+	stInvested, stCurrent := paise(port.Summary.Invested), paise(port.Summary.Value)
+	pos.Invested = mfInvested + stInvested + paise(prof.Other.Invested)
+	pos.Current = mfCurrent + stCurrent + paise(prof.Other.Current)
 	pos.Liabilities = paise(emiSum.Outstanding)
 	pos.Pnl, pos.NetWorth = pos.Current-pos.Invested, cash+pos.Current
 	if err := s.record(ctx, now, pos); err != nil {
@@ -371,7 +382,7 @@ func (s *Service) Get(ctx context.Context, r Range, key string, now time.Time) (
 	} else if ok {
 		pos.NetWorthChange, pos.ChangeSince = &ch, since
 	}
-	pos.Allocation = []Allocation{{"Cash", cash}, {"Mutual Funds", mfCurrent}, {"Stocks", paise(prof.Stocks.Current)}, {"Other", paise(prof.Other.Current)}}
+	pos.Allocation = []Allocation{{"Cash", cash}, {"Mutual Funds", mfCurrent}, {"Stocks", stCurrent}, {"Other", paise(prof.Other.Current)}}
 
 	recent, err := s.recent(ctx, r, n, 8)
 	if err != nil {

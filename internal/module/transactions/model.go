@@ -16,6 +16,12 @@ var validTypes = map[string]bool{
 // maxPaise is a sanity cap (10 crore rupees); anything above is a bad extraction.
 const maxPaise = 10_000_000_000
 
+// Split is one category's share of a payment.
+type Split struct {
+	CategoryID bson.ObjectID `bson:"category_id" json:"category_id"`
+	Paise      int64         `bson:"paise" json:"paise"`
+}
+
 type Transaction struct {
 	ID                  bson.ObjectID  `bson:"_id" json:"id"`
 	RawID               bson.ObjectID  `bson:"raw_id" json:"raw_id"`
@@ -43,6 +49,9 @@ type Transaction struct {
 	OwedFrom    string `bson:"owed_from,omitempty" json:"owed_from,omitempty"`
 	OwedPaise   int64  `bson:"owed_paise,omitempty" json:"owed_paise,omitempty"`
 	RepaidPaise int64  `bson:"repaid_paise,omitempty" json:"repaid_paise,omitempty"`
+	// Splits spreads one payment over several categories (Amazon: groceries plus a gift). They add up to the whole payment, so a split
+	// payment cannot also be owed. Empty means the payment sits in CategoryID alone.
+	Splits              []Split        `bson:"splits,omitempty" json:"splits,omitempty"`
 	NeedsReview         bool          `bson:"needs_review" json:"needs_review"`
 	ReviewReason        string         `bson:"review_reason,omitempty" json:"review_reason,omitempty"`
 	SuggestedCategoryID *bson.ObjectID `bson:"suggested_category_id,omitempty" json:"suggested_category_id,omitempty"`

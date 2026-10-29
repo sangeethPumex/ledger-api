@@ -105,6 +105,43 @@ func (s *Service) Delete(ctx context.Context, id bson.ObjectID) error {
 	return nil
 }
 
+// Merge folds vendor `from` into `into` ("SWIGGY" into "Swiggy Instamart"): its transactions move over, and its name and aliases become aliases
+// of the target so later messages still resolve. All of it commits together or not at all (a multi-document transaction), so a failure
+// halfway never leaves transactions pointing at a deleted vendor. The target's category then reaches the moved transactions via OnChange.
+func (s *Service) Merge(ctx context.Context, from, into bson.ObjectID) error {
+	if from == into {
+		return ErrInvalid
+	}
+	sess, err := s.col.Database().Client().StartSession()
+	if err != nil {
+		return err
+	}
+	defer sess.EndSession(ctx)
+	_, err = sess.WithTransaction(ctx, func(ctx context.Context) (any, error) {
+		var src Vendor
+		if err := s.col.FindOne(ctx, bson.M{"_id": from}).Decode(&src); err != nil {
+			return nil, err
+		}
+		// Delete first: aliases are unique across vendors, so the target cannot take them while the source still holds them.
+		if _, err := s.col.DeleteOne(ctx, bson.M{"_id": from}); err != nil {
+			return nil, err
+		}
+		res, err := s.col.UpdateByID(ctx, into, bson.M{"$addToSet": bson.M{"aliases": bson.M{"$each": append(cleanAliases(src.Aliases), Normalize(src.Name))}}})
+		if err != nil {
+			return nil, err
+		}
+		if res.MatchedCount == 0 {
+			return nil, mongo.ErrNoDocuments
+		}
+		_, err = s.txs.UpdateMany(ctx, bson.M{"vendor_id": from}, bson.M{"$set": bson.M{"vendor_id": into}})
+		return nil, err
+	})
+	if err == nil {
+		s.changed(ctx)
+	}
+	return err
+}
+
 func (s *Service) AddAlias(ctx context.Context, id bson.ObjectID, alias string) error {
 	a := Normalize(alias)
 	if a == "" {

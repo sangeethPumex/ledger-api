@@ -85,6 +85,24 @@ func (c *Controller) Delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(204)
 }
 
+func (c *Controller) Merge(w http.ResponseWriter, r *http.Request) {
+	id, ok := httpx.PathID(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		Into bson.ObjectID `json:"into"`
+	}
+	if !httpx.Decode(w, r, &req) {
+		return
+	}
+	if err := c.svc.Merge(r.Context(), id, req.Into); err != nil {
+		c.fail(w, err, "merge vendors")
+		return
+	}
+	w.WriteHeader(204)
+}
+
 func (c *Controller) AddAlias(w http.ResponseWriter, r *http.Request) {
 	id, ok := httpx.PathID(w, r)
 	if !ok {

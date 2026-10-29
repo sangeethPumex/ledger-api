@@ -15,6 +15,13 @@ type Patch struct {
 	// Owed records money someone else owes back on this payment; Paise 0 clears it. RepaidPaise is how much of it has come back.
 	Owed        *OwedPatch `json:"owed"`
 	RepaidPaise *int64     `json:"repaid_paise"`
+	// Splits replaces the split of this payment; an empty list removes it.
+	Splits *[]SplitPatch `json:"splits"`
+}
+
+type SplitPatch struct {
+	CategoryID string `json:"category_id"`
+	Paise      int64  `json:"paise"`
 }
 
 type OwedPatch struct {
@@ -99,6 +106,31 @@ func planOwed(t Transaction, owed *OwedPatch, repaid *int64) (set, unset bson.M,
 	return set, unset, nil
 }
 
+// planSplits checks a split of t: two to ten parts, each above zero, adding up to the whole payment, on money going out that is not owed back. Pure.
+func planSplits(t Transaction, parts []Split) error {
+	if len(parts) == 0 {
+		return nil
+	}
+	var sum int64
+	for _, p := range parts {
+		if p.Paise <= 0 {
+			return ErrPatch("each part must be above zero")
+		}
+		sum += p.Paise
+	}
+	switch {
+	case len(parts) < 2 || len(parts) > 10:
+		return ErrPatch("split a payment into 2 to 10 parts")
+	case t.Direction == "credit":
+		return ErrPatch("only money going out can be split")
+	case t.OwedPaise > 0:
+		return ErrPatch("remove what is owed back before splitting")
+	case sum != t.AmountPaise:
+		return ErrPatch("the parts must add up to the whole payment")
+	}
+	return nil
+}
+
 func (s *Service) Patch(ctx context.Context, id bson.ObjectID, p Patch) error {
 	var cat, card *bson.ObjectID
 	var clearCard bool
@@ -128,8 +160,23 @@ func (s *Service) Patch(ctx context.Context, id bson.ObjectID, p Patch) error {
 			card = &c
 		}
 	}
+	var parts []Split
+	if p.Splits != nil {
+		for _, sp := range *p.Splits {
+			c, err := bson.ObjectIDFromHex(sp.CategoryID)
+			if err != nil {
+				return ErrPatch("split category is not a valid id")
+			}
+			if ok, err := s.categories.Exists(ctx, c); err != nil {
+				return err
+			} else if !ok {
+				return ErrPatch("split category not found")
+			}
+			parts = append(parts, Split{CategoryID: c, Paise: sp.Paise})
+		}
+	}
 	hasOwed := p.Owed != nil || p.RepaidPaise != nil
-	if cat == nil && card == nil && !clearCard && !hasOwed {
+	if cat == nil && card == nil && !clearCard && !hasOwed && p.Splits == nil {
 		return ErrPatch("nothing to change")
 	}
 	var t Transaction
@@ -153,6 +200,21 @@ func (s *Service) Patch(ctx context.Context, id bson.ObjectID, p Patch) error {
 		}
 		maps.Copy(set, oset)
 		maps.Copy(unset, ounset)
+	}
+	switch {
+	case p.Splits != nil:
+		if err := planSplits(t, parts); err != nil {
+			return err
+		}
+		if len(parts) > 0 {
+			set["splits"] = parts
+		} else {
+			unset["splits"] = ""
+		}
+	case hasOwed && len(t.Splits) > 0 && p.Owed != nil && p.Owed.Paise > 0:
+		return ErrPatch("remove the split before marking money owed back")
+	case cat != nil && len(t.Splits) > 0:
+		unset["splits"] = "" // picking one category replaces the split
 	}
 	upd := bson.M{}
 	if len(set) > 0 {

@@ -73,3 +73,35 @@ func TestPlanOwed(t *testing.T) {
 		t.Errorf("clear: %v", unset)
 	}
 }
+
+func TestPlanSplits(t *testing.T) {
+	a, b := bson.NewObjectID(), bson.NewObjectID()
+	pay := Transaction{AmountPaise: 1000, Direction: "debit"}
+	parts := func(p ...int64) []Split {
+		out := []Split{}
+		for i, x := range p {
+			out = append(out, Split{CategoryID: []bson.ObjectID{a, b}[i%2], Paise: x})
+		}
+		return out
+	}
+	owed, credit := pay, pay
+	owed.OwedPaise = 100
+	credit.Direction = "credit"
+	for name, c := range map[string]struct {
+		t     Transaction
+		parts []Split
+		bad   bool
+	}{
+		"clears with no parts": {pay, nil, false},
+		"adds up":              {pay, parts(600, 400), false},
+		"short":                {pay, parts(600, 300), true},
+		"one part":             {pay, parts(1000), true},
+		"zero part":            {pay, parts(1000, 0), true},
+		"owed":                 {owed, parts(600, 400), true},
+		"credit":               {credit, parts(600, 400), true},
+	} {
+		if err := planSplits(c.t, c.parts); (err != nil) != c.bad {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+}
