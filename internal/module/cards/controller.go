@@ -15,6 +15,28 @@ type Controller struct{ svc *Service }
 
 func NewController(svc *Service) *Controller { return &Controller{svc} }
 
+// Payments is GET /cards/{id}/payments: the card's payment history, newest first (up to 100).
+func (c *Controller) Payments(w http.ResponseWriter, r *http.Request) {
+	id, ok := httpx.PathID(w, r)
+	if !ok {
+		return
+	}
+	if found, err := c.svc.Exists(r.Context(), id); err != nil {
+		httpx.Err(w, 500, "could not list payments")
+		return
+	} else if !found {
+		httpx.Err(w, 404, "card not found")
+		return
+	}
+	ps, err := c.svc.Payments(r.Context(), id, 100)
+	if err != nil {
+		log.Printf("cards: payments: %v", err)
+		httpx.Err(w, 500, "could not list payments")
+		return
+	}
+	httpx.WriteJSON(w, 200, ps)
+}
+
 func (c *Controller) Create(w http.ResponseWriter, r *http.Request) {
 	var req Card
 	if !httpx.Decode(w, r, &req) {

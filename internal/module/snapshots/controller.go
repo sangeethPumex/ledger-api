@@ -34,6 +34,7 @@ func (c *Controller) List(w http.ResponseWriter, r *http.Request) {
 		httpx.Err(w, 400, "from and to must be dates like 2026-10-31")
 		return
 	}
+	from = max(from, StartDay)
 	if from > to || len(DaysBetween(from, to)) > maxRange {
 		httpx.Err(w, 400, "from must not be after to, and the range is at most 400 days")
 		return

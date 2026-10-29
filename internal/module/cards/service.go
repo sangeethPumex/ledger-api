@@ -275,6 +275,48 @@ func (s *Service) cycleSums(ctx context.Context, cards []Card, now time.Time) (m
 	return out, nil
 }
 
+// Payment is one bill payment the user linked to a card: the transaction as it stands.
+type Payment struct {
+	TxnID        bson.ObjectID  `json:"txn_id"`
+	At           time.Time      `json:"at"` // when the payment message arrived
+	AmountPaise  int64          `json:"amount_paise"`
+	AccountID    *bson.ObjectID `json:"account_id,omitempty"` // the bank account it left
+	Bank         string         `json:"bank,omitempty"`
+	AccountLast4 string         `json:"account_last4,omitempty"`
+	Payee        string         `json:"payee,omitempty"`
+}
+
+// Payments lists the bill payments linked to a card (transactions in "Credit card payments" that name it), newest first.
+// Served by the partial paid_card_id index.
+func (s *Service) Payments(ctx context.Context, id bson.ObjectID, limit int64) ([]Payment, error) {
+	cur, err := s.txs.Find(ctx, bson.M{"paid_card_id": id}, options.Find().SetSort(bson.D{{Key: "received_at", Value: -1}, {Key: "_id", Value: -1}}).SetLimit(limit))
+	if err != nil {
+		return nil, err
+	}
+	var docs []struct {
+		ID           bson.ObjectID  `bson:"_id"`
+		ReceivedAt   time.Time      `bson:"received_at"`
+		OccurredAt   time.Time      `bson:"occurred_at"`
+		AmountPaise  int64          `bson:"amount_paise"`
+		AccountID    *bson.ObjectID `bson:"account_id"`
+		Bank         string         `bson:"bank"`
+		AccountLast4 string         `bson:"account_last4"`
+		RawVendor    string         `bson:"raw_vendor"`
+	}
+	if err := cur.All(ctx, &docs); err != nil {
+		return nil, err
+	}
+	out := make([]Payment, len(docs))
+	for i, d := range docs {
+		at := d.ReceivedAt
+		if at.IsZero() {
+			at = d.OccurredAt
+		}
+		out[i] = Payment{TxnID: d.ID, At: at, AmountPaise: d.AmountPaise, AccountID: d.AccountID, Bank: d.Bank, AccountLast4: d.AccountLast4, Payee: d.RawVendor}
+	}
+	return out, nil
+}
+
 // Views lists every card with its cycle spend, limit use, statement and linked loans: three queries however many cards there are.
 func (s *Service) Views(ctx context.Context, now time.Time) ([]View, error) {
 	cards, err := s.List(ctx)

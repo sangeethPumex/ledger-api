@@ -21,6 +21,9 @@ import (
 
 const Collection = "daily_snapshots"
 
+// StartDay is the first day the table covers: the statements begin on 1 October 2026, so nothing earlier is kept or built.
+const StartDay = "2026-10-01"
+
 const (
 	SourceLive     = "live"
 	SourceBackfill = "backfill"

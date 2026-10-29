@@ -20,9 +20,6 @@ import (
 	"ledger-backend/internal/spend"
 )
 
-// maxHistoryDays is how far back the first backfill reaches.
-const maxHistoryDays = 400
-
 type Service struct {
 	col      *mongo.Collection
 	txs      *mongo.Collection // owned by the transactions module; read only
@@ -285,7 +282,7 @@ func (s *Service) put(ctx context.Context, snaps ...Snapshot) error {
 	return err
 }
 
-// FirstDay is the earliest day worth a row: the first transaction or account opening, no further back than maxHistoryDays. "" when there is no data.
+// FirstDay is the earliest day worth a row: the first transaction or account opening, but never before StartDay. "" when there is no data.
 func (s *Service) FirstDay(ctx context.Context, now time.Time) (string, error) {
 	first := ""
 	accs, err := s.accounts.Raw(ctx)
@@ -309,8 +306,8 @@ func (s *Service) FirstDay(ctx context.Context, now time.Time) (string, error) {
 			first = d
 		}
 	}
-	if floor := Day(now.AddDate(0, 0, -maxHistoryDays)); first != "" && first < floor {
-		first = floor
+	if first != "" && first < StartDay {
+		first = StartDay
 	}
 	return first, nil
 }
@@ -321,6 +318,7 @@ func (s *Service) Backfill(ctx context.Context, from, to string, force bool, now
 	if yday := Day(now.AddDate(0, 0, -1)); to == "" || to > yday {
 		to = yday
 	}
+	from = max(from, StartDay)
 	days := DaysBetween(from, to)
 	if len(days) == 0 {
 		return 0, nil
@@ -385,6 +383,9 @@ func (s *Service) Finalize(ctx context.Context, day string) error {
 
 // Tick keeps the table current: fills any missing past days, settles yesterday once, and rewrites today from live figures.
 func (s *Service) Tick(ctx context.Context, now time.Time) error {
+	if _, err := s.col.DeleteMany(ctx, bson.M{"_id": bson.M{"$lt": StartDay}}); err != nil { // rows from before the statements began
+		return err
+	}
 	yday := Day(now.AddDate(0, 0, -1))
 	first, err := s.FirstDay(ctx, now)
 	if err != nil {
@@ -428,6 +429,7 @@ func (s *Service) Run(ctx context.Context, every time.Duration) {
 
 // Range lists the rows from..to inclusive, oldest first.
 func (s *Service) Range(ctx context.Context, from, to string) ([]Snapshot, error) {
+	from = max(from, StartDay)
 	cur, err := s.col.Find(ctx, bson.M{"_id": bson.M{"$gte": from, "$lte": to}}, options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}))
 	if err != nil {
 		return nil, err
