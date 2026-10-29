@@ -317,6 +317,43 @@ func (s *Service) Payments(ctx context.Context, id bson.ObjectID, limit int64) (
 	return out, nil
 }
 
+type lastPayment struct {
+	n     int
+	at    time.Time
+	paise int64
+}
+
+// lastPayments is, per card, how many linked payments there are and the latest one: a single grouped read of the partial paid_card_id index.
+func (s *Service) lastPayments(ctx context.Context) (map[bson.ObjectID]lastPayment, error) {
+	at := bson.M{"$ifNull": bson.A{"$received_at", "$occurred_at"}}
+	cur, err := s.txs.Aggregate(ctx, mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{"paid_card_id": bson.M{"$exists": true}}}},
+		{{Key: "$group", Value: bson.M{
+			"_id": "$paid_card_id", "n": bson.M{"$sum": 1},
+			"last": bson.M{"$top": bson.M{"sortBy": bson.M{"received_at": -1, "_id": -1}, "output": bson.M{"at": at, "paise": "$amount_paise"}}},
+		}}},
+	})
+	if err != nil {
+		return nil, err
+	}
+	var rows []struct {
+		ID   bson.ObjectID `bson:"_id"`
+		N    int           `bson:"n"`
+		Last struct {
+			At    time.Time `bson:"at"`
+			Paise int64     `bson:"paise"`
+		} `bson:"last"`
+	}
+	if err := cur.All(ctx, &rows); err != nil {
+		return nil, err
+	}
+	out := make(map[bson.ObjectID]lastPayment, len(rows))
+	for _, r := range rows {
+		out[r.ID] = lastPayment{r.N, r.Last.At, r.Last.Paise}
+	}
+	return out, nil
+}
+
 // Views lists every card with its cycle spend, limit use, statement and linked loans: three queries however many cards there are.
 func (s *Service) Views(ctx context.Context, now time.Time) ([]View, error) {
 	cards, err := s.List(ctx)
@@ -342,12 +379,19 @@ func (s *Service) Views(ctx context.Context, now time.Time) ([]View, error) {
 	if err != nil {
 		return nil, err
 	}
+	last, err := s.lastPayments(ctx)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]View, len(cards))
 	for i, c := range cards {
 		t := tot[c.ID]
 		out[i] = Compute(c, t.spent, t.n, byCard[c.ID], now)
 		out[i].Statement = BuildStatement(c, t.billed, t.paid, now)
 		out[i].AddUnpaidStatement()
+		if p, ok := last[c.ID]; ok {
+			out[i].Payments, out[i].LastPaymentAt, out[i].LastPaymentPaise = p.n, &p.at, p.paise
+		}
 	}
 	ApplyShared(out)
 	return out, nil

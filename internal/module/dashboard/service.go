@@ -55,9 +55,6 @@ func NewService(db *mongo.Database, a *accounts.Service, c *cards.Service, p *pr
 	if _, err := s.chats.Indexes().CreateOne(ctx, mongo.IndexModel{Keys: bson.D{{Key: "updatedAt", Value: -1}}}); err != nil {
 		log.Printf("dashboard: chat index: %v", err)
 	}
-	if err := s.seed(ctx); err != nil {
-		log.Printf("dashboard: seed net worth history: %v", err)
-	}
 	return s
 }
 

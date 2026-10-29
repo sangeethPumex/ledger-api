@@ -26,34 +26,6 @@ type monthDoc struct {
 	Investments *int64 `bson:"investments,omitempty"`
 }
 
-// seedMonths is net worth entered by hand for months before Catalyst recorded them (paise). Inserted once, never overwritten.
-var seedMonths = []monthDoc{
-	{ID: "2026-05", Date: "2026-05-31", NetWorth: 29009000},
-	{ID: "2026-06", Date: "2026-06-30", NetWorth: 29790200},
-	{ID: "2026-07", Date: "2026-07-31", NetWorth: 30300200},
-	{ID: "2026-08", Date: "2026-08-31", NetWorth: 31083000},
-	{ID: "2026-09", Date: "2026-09-30", NetWorth: 32389200},
-}
-
-func (s *Service) seed(ctx context.Context) error {
-	for _, m := range seedMonths {
-		if _, err := s.months.UpdateOne(ctx, bson.M{"_id": m.ID}, bson.M{"$setOnInsert": m}, options.UpdateOne().SetUpsert(true)); err != nil {
-			return err
-		}
-		// Owed on that date comes from the loan statement; only rows with no owed figure are touched.
-		owed, ok, err := s.emis.OwedOn(ctx, m.Date)
-		if err != nil {
-			return err
-		}
-		if ok {
-			if _, err := s.months.UpdateOne(ctx, bson.M{"_id": m.ID, "owed": bson.M{"$exists": false}}, bson.M{"$set": bson.M{"owed": paise(owed)}}); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
 // NWPoint is one plotted point. Optional fields are absent when the figure was never recorded. Change is against the previous point
 // in the same series (history, then each scenario).
 type NWPoint struct {

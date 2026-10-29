@@ -22,6 +22,7 @@ import (
 	"ledger-backend/internal/module/insights"
 	"ledger-backend/internal/module/mandates"
 	"ledger-backend/internal/module/profile"
+	"ledger-backend/internal/module/purge"
 	"ledger-backend/internal/module/raw_transactions"
 	"ledger-backend/internal/module/snapshots"
 	"ledger-backend/internal/module/stocks"
@@ -133,6 +134,7 @@ func main() {
 	insights.RegisterRoutes(mux, insights.NewController(insights.NewService(db)), auth)
 	views.RegisterRoutes(mux, views.NewController(viewSvc), auth)
 	snapshots.RegisterRoutes(mux, snapshots.NewController(snapSvc), auth)
+	purge.RegisterRoutes(mux, purge.NewController(purge.NewService(db, accSvc)), auth)
 
 	// Every endpoint lives under /finance/api, e.g. /finance/api/transactions.
 	root := http.NewServeMux()

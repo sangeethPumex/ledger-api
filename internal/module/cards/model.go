@@ -136,6 +136,10 @@ type View struct {
 	SharedWithName string   `json:"shared_with_name,omitempty"` // the card that owns the limit, on a card that shares
 	SharedCards    []string `json:"shared_cards"`               // names of the other cards in the group
 	GroupUsedPaise int64    `json:"group_used_paise,omitempty"`
+	// The bill payments linked to this card from transactions: how many, and the latest.
+	Payments         int        `json:"payments"`
+	LastPaymentAt    *time.Time `json:"last_payment_at,omitempty"`
+	LastPaymentPaise int64      `json:"last_payment_paise,omitempty"`
 }
 
 func paise(rupees float64) int64 { return int64(rupees*100 + 0.5) }
