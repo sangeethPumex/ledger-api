@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"sort"
+	"sync"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -25,7 +26,7 @@ import (
 // Chatter is the LLM call (nim.Client satisfies it).
 type Chatter interface {
 	Chat(ctx context.Context, system, user string) (string, error)
-	ChatStream(ctx context.Context, system string, msgs []nim.Message, onDelta func(string)) error
+	Complete(ctx context.Context, system string, msgs []nim.Message, tools []nim.Tool) (nim.Message, error)
 }
 
 type Service struct {
@@ -39,12 +40,19 @@ type Service struct {
 	stocks   *stocks.Service
 	mandates *mandates.Service
 	llm      Chatter
+	chats    *mongo.Collection // saved AI conversations, owned here
+
+	sumMu sync.Mutex
+	sums  map[string]cachedSummary // 60 s dashboard summaries for the AI paths
 }
 
 func NewService(db *mongo.Database, a *accounts.Service, c *cards.Service, p *profile.Service, e *emis.Service, f *funds.Service, st *stocks.Service, m *mandates.Service, llm Chatter) *Service {
-	s := &Service{txs: db.Collection("transactions"), months: db.Collection("networth"), accounts: a, cards: c, profile: p, emis: e, funds: f, stocks: st, mandates: m, llm: llm}
+	s := &Service{txs: db.Collection("transactions"), months: db.Collection("networth"), accounts: a, cards: c, profile: p, emis: e, funds: f, stocks: st, mandates: m, llm: llm, chats: db.Collection("ai_chats"), sums: map[string]cachedSummary{}}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	if _, err := s.chats.Indexes().CreateOne(ctx, mongo.IndexModel{Keys: bson.D{{Key: "updatedAt", Value: -1}}}); err != nil {
+		log.Printf("dashboard: chat index: %v", err)
+	}
 	if err := s.seed(ctx); err != nil {
 		log.Printf("dashboard: seed net worth history: %v", err)
 	}
@@ -80,11 +88,16 @@ type dayDoc struct {
 	} `bson:"top"`
 }
 
+// labelExpr names a transaction's counterparty after a $lookup of vendors into "ven": a saved vendor's name beats the raw SMS payee / UPI id.
+func labelExpr() bson.M {
+	str := func(path string) bson.M { return bson.M{"$ifNull": bson.A{path, ""}} }
+	nonEmpty := func(path string) bson.M { return bson.M{"$gt": bson.A{bson.M{"$strLenCP": str(path)}, 0}} }
+	return bson.M{"$ifNull": bson.A{bson.M{"$first": "$ven.name"}, bson.M{"$cond": bson.A{nonEmpty("$raw_vendor"), "$raw_vendor", bson.M{"$cond": bson.A{nonEmpty("$upi_id"), "$upi_id", "Unknown"}}}}}}
+}
+
 // aggregate classifies a window of transactions in one pipeline: totals per flow (income by payer, spend by category) with each flow's
 // biggest transactions, and spend per IST day with the day's biggest transaction. Transfers, refunds and card-bill payments never match.
 func (s *Service) aggregate(ctx context.Context, from, to time.Time) ([]flowDoc, []dayDoc, error) {
-	str := func(path string) bson.M { return bson.M{"$ifNull": bson.A{path, ""}} }
-	nonEmpty := func(path string) bson.M { return bson.M{"$gt": bson.A{bson.M{"$strLenCP": str(path)}, 0}} }
 	pipe := mongo.Pipeline{
 		{{Key: "$match", Value: bson.M{
 			"occurred_at": bson.M{"$gte": from.UTC(), "$lt": to.UTC()},
@@ -101,9 +114,8 @@ func (s *Service) aggregate(ctx context.Context, from, to time.Time) ([]flowDoc,
 		{{Key: "$lookup", Value: bson.M{"from": "vendors", "localField": "vendor_id", "foreignField": "_id", "as": "ven"}}},
 		{{Key: "$addFields", Value: bson.M{
 			"_dir": bson.M{"$cond": bson.A{bson.M{"$eq": bson.A{"$type", "income"}}, "in", "out"}},
-			// A saved vendor's name beats the raw SMS payee / UPI id.
-			"_label": bson.M{"$ifNull": bson.A{bson.M{"$first": "$ven.name"}, bson.M{"$cond": bson.A{nonEmpty("$raw_vendor"), "$raw_vendor", bson.M{"$cond": bson.A{nonEmpty("$upi_id"), "$upi_id", "Unknown"}}}}}},
-			"_cat":   bson.M{"$ifNull": bson.A{bson.M{"$first": "$cat.name"}, "Uncategorised"}},
+			"_label": labelExpr(),
+			"_cat":  bson.M{"$ifNull": bson.A{bson.M{"$first": "$cat.name"}, "Uncategorised"}},
 		}}},
 		{{Key: "$addFields", Value: bson.M{"_name": bson.M{"$switch": bson.M{
 			"branches": bson.A{

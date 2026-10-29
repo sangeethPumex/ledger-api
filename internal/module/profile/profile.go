@@ -3,7 +3,9 @@ package profile
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -44,7 +46,8 @@ type Profile struct {
 	Other        Holding   `json:"other" bson:"other"`
 	Goals        string    `json:"goals" bson:"goals"`
 	Prior        Prior     `json:"prior" bson:"prior"`
-	UpdatedAt    time.Time `json:"updatedAt" bson:"updatedAt"`
+	Memory       []string  `json:"memory" bson:"memory,omitempty"` // goals and preferences the AI noted from chats; changed only by Remember/Forget
+	UpdatedAt   time.Time `json:"updatedAt" bson:"updatedAt"`
 }
 
 func neg(v ...float64) bool {
@@ -100,7 +103,39 @@ func (s *Service) Put(ctx context.Context, p Profile) error {
 	}
 	p.ID, p.UpdatedAt = docID, time.Now().UTC()
 	p.Prior = stampPrior(old.Prior, p.Prior, p.UpdatedAt)
-	_, err = s.col.ReplaceOne(ctx, bson.M{"_id": docID}, p, options.Replace().SetUpsert(true))
+	// $set everything but memory, so a save from About Me cannot undo a fact the AI noted meanwhile.
+	raw, err := bson.Marshal(p)
+	if err != nil {
+		return err
+	}
+	var set bson.M
+	if err := bson.Unmarshal(raw, &set); err != nil {
+		return err
+	}
+	delete(set, "memory")
+	delete(set, "_id")
+	_, err = s.col.UpdateOne(ctx, bson.M{"_id": docID}, bson.M{"$set": set}, options.UpdateOne().SetUpsert(true))
+	return err
+}
+
+const maxMemory, maxFactLen = 30, 200
+
+// Remember appends one fact once, keeping the newest maxMemory. It is a single atomic update, safe beside concurrent saves.
+func (s *Service) Remember(ctx context.Context, fact string) error {
+	fact = strings.TrimSpace(fact)
+	if fact == "" || len(fact) > maxFactLen {
+		return errors.New("fact must be 1-200 characters")
+	}
+	_, err := s.col.UpdateOne(ctx, bson.M{"_id": docID, "memory": bson.M{"$ne": fact}},
+		bson.M{"$push": bson.M{"memory": bson.M{"$each": bson.A{fact}, "$slice": -maxMemory}}}, options.UpdateOne().SetUpsert(true))
+	if mongo.IsDuplicateKeyError(err) { // the fact is already there: the upsert collided with the existing document
+		return nil
+	}
+	return err
+}
+
+func (s *Service) Forget(ctx context.Context, fact string) error {
+	_, err := s.col.UpdateOne(ctx, bson.M{"_id": docID}, bson.M{"$pull": bson.M{"memory": fact}})
 	return err
 }
 
@@ -133,7 +168,21 @@ func (c *Controller) Put(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(204)
 }
 
+func (c *Controller) Forget(w http.ResponseWriter, r *http.Request) {
+	fact := r.URL.Query().Get("fact")
+	if fact == "" {
+		httpx.Err(w, 400, "fact required")
+		return
+	}
+	if err := c.svc.Forget(r.Context(), fact); err != nil {
+		httpx.Err(w, 500, "could not forget")
+		return
+	}
+	w.WriteHeader(204)
+}
+
 func RegisterRoutes(mux *http.ServeMux, c *Controller, auth func(http.Handler) http.Handler) {
 	mux.Handle("GET /profile", auth(http.HandlerFunc(c.Get)))
 	mux.Handle("PUT /profile", auth(http.HandlerFunc(c.Put)))
+	mux.Handle("DELETE /profile/memory", auth(http.HandlerFunc(c.Forget)))
 }

@@ -183,12 +183,22 @@ func (s *Service) resync(ctx context.Context) error {
 }
 
 func (s *Service) List(ctx context.Context, f Filter) ([]Transaction, error) {
-	cur, err := s.col.Find(ctx, f.Query(), options.Find().SetSort(bson.D{{Key: "received_at", Value: -1}, {Key: "occurred_at", Value: -1}, {Key: "_id", Value: -1}}).SetLimit(f.Limit))
+	cur, err := s.col.Find(ctx, f.Query(), options.Find().SetSort(bson.D{{Key: "received_at", Value: -1}, {Key: "occurred_at", Value: -1}, {Key: "_id", Value: -1}}).SetLimit(f.Limit).SetSkip(f.Skip))
 	if err != nil {
 		return nil, err
 	}
 	out := []Transaction{}
 	return out, cur.All(ctx, &out)
+}
+
+// Page is one page of the list plus the number of transactions matching the filter, so the UI can show "page 2 of 9".
+func (s *Service) Page(ctx context.Context, f Filter, page int64) (items []Transaction, total int64, err error) {
+	f.Skip = (page - 1) * f.Limit
+	if total, err = s.col.CountDocuments(ctx, f.Query()); err != nil {
+		return nil, 0, err
+	}
+	items, err = s.List(ctx, f)
+	return items, total, err
 }
 
 // ParsePending parses every message ledger-api has stored as pending.

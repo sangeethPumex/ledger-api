@@ -62,10 +62,72 @@ func (c *Client) Chat(ctx context.Context, system, user string) (string, error) 
 	return out.Choices[0].Message.Content, nil
 }
 
-// Message is one chat turn.
+// Message is one chat turn. An assistant turn may carry ToolCalls; a "tool" turn answers one by ToolCallID.
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+}
+
+type ToolCall struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"` // a JSON object, as text
+	} `json:"function"`
+}
+
+// Tool is a function the model may ask for; Parameters is a JSON Schema object.
+type Tool struct {
+	Type     string `json:"type"`
+	Function struct {
+		Name        string         `json:"name"`
+		Description string         `json:"description"`
+		Parameters  map[string]any `json:"parameters"`
+	} `json:"function"`
+}
+
+// Complete runs one non-streaming turn with tools on offer and returns the assistant message, which has either Content or ToolCalls.
+func (c *Client) Complete(ctx context.Context, system string, msgs []Message, tools []Tool) (Message, error) {
+	req := map[string]any{
+		"model":       c.Model,
+		"messages":    append([]Message{{Role: "system", Content: system}}, msgs...),
+		"max_tokens":  4096,
+		"temperature": 0.2,
+		"stream":      false,
+	}
+	if len(tools) > 0 {
+		req["tools"], req["tool_choice"] = tools, "auto"
+	}
+	body, _ := json.Marshal(req)
+	hr, err := http.NewRequestWithContext(ctx, "POST", c.URL, bytes.NewReader(body))
+	if err != nil {
+		return Message{}, err
+	}
+	hr.Header.Set("Authorization", "Bearer "+c.Key)
+	hr.Header.Set("Content-Type", "application/json")
+	resp, err := c.HTTP.Do(hr)
+	if err != nil {
+		return Message{}, err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		return Message{}, fmt.Errorf("nim status %d: %.200s", resp.StatusCode, raw)
+	}
+	var out struct {
+		Choices []struct {
+			Message Message `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil || len(out.Choices) == 0 {
+		return Message{}, fmt.Errorf("nim: bad response")
+	}
+	m := out.Choices[0].Message
+	m.Role = "assistant"
+	return m, nil
 }
 
 // ChatStream sends the conversation and calls onDelta with each piece of the answer as it arrives (reasoning_content is ignored).

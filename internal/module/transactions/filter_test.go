@@ -31,3 +31,20 @@ func TestParseFilter(t *testing.T) {
 		t.Errorf("empty filter should match everything: %v", q.Query())
 	}
 }
+
+func TestParseFilterStatus(t *testing.T) {
+	f, msg := ParseFilter(url.Values{"status": {"attention"}, "q": {"x"}})
+	if msg != "" {
+		t.Fatal(msg)
+	}
+	q := f.Query()
+	if q["$and"] == nil || q["$or"] == nil { // the status OR must not overwrite the search OR
+		t.Errorf("both ORs expected: %v", q)
+	}
+	if f, _ := ParseFilter(url.Values{"status": {"uncategorised"}}); f.Query()["category_id"] == nil {
+		t.Error("uncategorised must test for a missing category")
+	}
+	if _, msg := ParseFilter(url.Values{"status": {"new"}}); msg == "" {
+		t.Error("unknown status accepted")
+	}
+}

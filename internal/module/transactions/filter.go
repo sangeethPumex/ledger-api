@@ -22,7 +22,10 @@ type Filter struct {
 	MinPaise    int64
 	MaxPaise    int64 // 0 = no cap
 	Owed        bool  // only payments someone owes back
-	Limit       int64
+	// Status picks what needs attention: "review" (new vendor, not confirmed), "uncategorised" (no category yet) or "attention" (either).
+	Status string
+	Limit  int64
+	Skip   int64
 }
 
 // Query is the Mongo filter for f. Pure.
@@ -69,6 +72,15 @@ func (f Filter) Query() bson.M {
 	}
 	if f.Owed {
 		q["owed_paise"] = bson.M{"$gt": 0}
+	}
+	uncategorised := bson.M{"category_id": bson.M{"$exists": false}}
+	switch f.Status {
+	case "review":
+		q["needs_review"] = true
+	case "uncategorised":
+		q["category_id"] = bson.M{"$exists": false}
+	case "attention":
+		q["$and"] = bson.A{bson.M{"$or": bson.A{bson.M{"needs_review": true}, uncategorised}}}
 	}
 	return q
 }
@@ -127,5 +139,8 @@ func ParseFilter(v url.Values) (f Filter, msg string) {
 		}
 	}
 	f.Owed = v.Get("owed") == "true"
+	if f.Status = v.Get("status"); f.Status != "" && f.Status != "review" && f.Status != "uncategorised" && f.Status != "attention" {
+		return f, "status must be review, uncategorised or attention"
+	}
 	return f, ""
 }
