@@ -207,7 +207,11 @@ type Upcoming struct {
 	MonthlyBurn    int64    `json:"monthlyBurnPaise"` // net outflow per month when negative, else 0
 	RunwayDays     *int     `json:"runwayDays,omitempty"`
 	RunwayTone     Tone     `json:"runwayTone"`
-	DailyTarget    int64    `json:"dailyTargetPaise"`
+	// If income stopped: spending, fixed costs and EMIs continue, SIPs pause. Cash-only vs cash plus every investment sold.
+	StopBurn        int64 `json:"stopBurnPaise"`
+	RunwayCashDays  *int  `json:"runwayCashDays,omitempty"`
+	RunwayWorthDays *int  `json:"runwayWorthDays,omitempty"`
+	DailyTarget   int64    `json:"dailyTargetPaise"`
 	TodaySpent     int64    `json:"todaySpentPaise"`
 	DailyTone      Tone     `json:"dailyTone"`
 	CommittedDue   int64    `json:"committedDuePaise"` // EMIs and SIPs debiting before the next salary
@@ -225,7 +229,8 @@ type Next struct {
 
 type upcomingIn struct {
 	Cash       int64
-	Profile    *profile.Profile
+	NetWorth   int64 // cash + investments
+	Profile   *profile.Profile
 	Emis       *emis.Summary
 	Funds      *funds.Summary
 	Last30     int64 // spend over the last 30 days
@@ -295,6 +300,11 @@ func upcoming(in upcomingIn) Upcoming {
 		case d < 90:
 			u.RunwayTone = "warn"
 		}
+	}
+
+	if u.StopBurn = u.AvgDailySpend*30 + paise(p.FixedMonthly) + u.EmiMonthly; u.StopBurn > 0 {
+		days := func(pool int64) *int { d := max(int(float64(pool)/(float64(u.StopBurn)/30)), 0); return &d }
+		u.RunwayCashDays, u.RunwayWorthDays = days(in.Cash), days(max(in.NetWorth, in.Cash))
 	}
 
 	if u.BufferTarget > 0 {

@@ -32,6 +32,7 @@ type Chatter interface {
 
 type Service struct {
 	txs      *mongo.Collection // owned by the transactions module; read only
+	vens     *mongo.Collection // vendors module; read only, for display names
 	months   *mongo.Collection // month-end net worth, owned here
 	accounts *accounts.Service
 	cards    *cards.Service
@@ -49,7 +50,7 @@ type Service struct {
 }
 
 func NewService(db *mongo.Database, a *accounts.Service, c *cards.Service, p *profile.Service, e *emis.Service, f *funds.Service, st *stocks.Service, m *mandates.Service, llm Chatter) *Service {
-	s := &Service{txs: db.Collection("transactions"), months: db.Collection("networth"), accounts: a, cards: c, profile: p, emis: e, funds: f, stocks: st, mandates: m, llm: llm, chats: db.Collection("ai_chats"), sums: map[string]cachedSummary{}}
+	s := &Service{txs: db.Collection("transactions"), vens: db.Collection("vendors"), months: db.Collection("networth"), accounts: a, cards: c, profile: p, emis: e, funds: f, stocks: st, mandates: m, llm: llm, chats: db.Collection("ai_chats"), sums: map[string]cachedSummary{}}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if _, err := s.chats.Indexes().CreateOne(ctx, mongo.IndexModel{Keys: bson.D{{Key: "updatedAt", Value: -1}}}); err != nil {
@@ -263,6 +264,7 @@ type recentDoc struct {
 	Last4       string         `bson:"account_last4"`
 	AccountID   *bson.ObjectID `bson:"account_id"`
 	CardID      *bson.ObjectID `bson:"card_id"`
+	VendorID    *bson.ObjectID `bson:"vendor_id"`
 }
 
 func (s *Service) recent(ctx context.Context, r Range, n names, limit int64) ([]TxnView, error) {
@@ -275,9 +277,36 @@ func (s *Service) recent(ctx context.Context, r Range, n names, limit int64) ([]
 	if err := cur.All(ctx, &docs); err != nil {
 		return nil, err
 	}
+	// A saved vendor's name beats the raw SMS payee / UPI id.
+	var ids bson.A
+	for _, d := range docs {
+		if d.VendorID != nil {
+			ids = append(ids, *d.VendorID)
+		}
+	}
+	vname := map[bson.ObjectID]string{}
+	if len(ids) > 0 {
+		vc, err := s.vens.Find(ctx, bson.M{"_id": bson.M{"$in": ids}}, options.Find().SetProjection(bson.M{"name": 1}))
+		if err != nil {
+			return nil, err
+		}
+		var vs []struct {
+			ID   bson.ObjectID `bson:"_id"`
+			Name string        `bson:"name"`
+		}
+		if err := vc.All(ctx, &vs); err != nil {
+			return nil, err
+		}
+		for _, v := range vs {
+			vname[v.ID] = v.Name
+		}
+	}
 	out := make([]TxnView, 0, len(docs))
 	for _, d := range docs {
 		vendor := d.RawVendor
+		if d.VendorID != nil && vname[*d.VendorID] != "" {
+			vendor = vname[*d.VendorID]
+		}
 		if vendor == "" {
 			vendor = d.UPIID
 		}
@@ -441,7 +470,7 @@ func (s *Service) Get(ctx context.Context, r Range, key string, now time.Time) (
 	}
 	pos.Allocation = []Allocation{{"Cash", cash}, {"Mutual Funds", mfCurrent}, {"Stocks", stCurrent}, {"Other", paise(prof.Other.Current)}}
 
-	recent, err := s.recent(ctx, r, n, 8)
+	recent, err := s.recent(ctx, Range{From: today, To: today.AddDate(0, 0, 1)}, n, 50)
 	if err != nil {
 		return nil, err
 	}
@@ -462,7 +491,7 @@ func (s *Service) Get(ctx context.Context, r Range, key string, now time.Time) (
 	return &Response{
 		Period:   Period{Key: key, From: r.From.Format(time.RFC3339), To: r.To.Format(time.RFC3339)},
 		Position: pos, Cashflow: cf, Recent: recent, Mandates: m, OwedToYou: owed,
-		Upcoming:     upcoming(upcomingIn{Cash: cash, Profile: prof, Emis: emiSum, Funds: fundSum, Last30: last30, MonthSpent: monthSpent, Today: todaySpent, Now: now}),
+		Upcoming:     upcoming(upcomingIn{Cash: cash, NetWorth: pos.NetWorth, Profile: prof, Emis: emiSum, Funds: fundSum, Last30: last30, MonthSpent: monthSpent, Today: todaySpent, Now: now}),
 		NeedsProfile: prof.Salary == 0 && pos.Invested == 0,
 	}, nil
 }
