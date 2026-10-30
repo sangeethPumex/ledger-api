@@ -13,6 +13,7 @@ import (
 
 	"ledger-backend/internal/middleware"
 	"ledger-backend/internal/module/accounts"
+	"ledger-backend/internal/module/alerts"
 	"ledger-backend/internal/module/cards"
 	"ledger-backend/internal/module/budgets"
 	"ledger-backend/internal/module/categories"
@@ -21,6 +22,7 @@ import (
 	"ledger-backend/internal/module/funds"
 	"ledger-backend/internal/module/insights"
 	"ledger-backend/internal/module/mandates"
+	"ledger-backend/internal/module/portfolio"
 	"ledger-backend/internal/module/profile"
 	"ledger-backend/internal/module/purge"
 	"ledger-backend/internal/module/raw_transactions"
@@ -83,6 +85,11 @@ func main() {
 		yahooURL = "https://query1.finance.yahoo.com/v8/finance/chart"
 	}
 	stockSvc := stocks.NewService(db, stocks.NewYahoo(yahooURL))
+	alertSvc, err := alerts.NewService(ctx, db, stockSvc, fundSvc)
+	check(err)
+	go alertSvc.Run(context.Background(), 5*time.Minute)
+	portSvc, err := portfolio.NewService(ctx, db, fundSvc, stockSvc, accSvc)
+	check(err)
 	profSvc := profile.NewService(db)
 	mandSvc := mandates.NewService(db)
 	budSvc, err := budgets.NewService(ctx, db)
@@ -129,6 +136,8 @@ func main() {
 	mandates.RegisterRoutes(mux, mandates.NewController(mandSvc), auth)
 	funds.RegisterRoutes(mux, funds.NewController(fundSvc), auth)
 	stocks.RegisterRoutes(mux, stocks.NewController(stockSvc), auth)
+	portfolio.RegisterRoutes(mux, portfolio.NewController(portSvc), auth)
+	alerts.RegisterRoutes(mux, alerts.NewController(alertSvc), auth)
 	dashboard.RegisterRoutes(mux, dashboard.NewController(dashSvc), auth)
 	budgets.RegisterRoutes(mux, budgets.NewController(budSvc), auth)
 	insights.RegisterRoutes(mux, insights.NewController(insights.NewService(db)), auth)

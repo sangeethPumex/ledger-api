@@ -60,6 +60,9 @@ type Input struct {
 // The symbol goes into a URL path, so keep it to what Yahoo tickers actually use.
 var symbolRe = regexp.MustCompile(`^[A-Z0-9&^-]{1,20}\.(NS|BO)$`)
 
+// ValidSymbol reports whether s is a Yahoo ticker with an exchange suffix, safe to put in a URL path.
+func ValidSymbol(s string) bool { return symbolRe.MatchString(s) }
+
 // Validate normalises the symbol and returns a message if the input is unusable.
 func (in *Input) Validate(now time.Time) string {
 	in.Symbol = strings.ToUpper(strings.TrimSpace(in.Symbol))

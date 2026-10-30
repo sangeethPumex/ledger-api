@@ -17,6 +17,28 @@ type Sip struct {
 	Amount float64 `json:"amount" bson:"amount"`
 	Day    int     `json:"day" bson:"day"`
 	Status string  `json:"status,omitempty" bson:"status,omitempty"` // active (or empty) | paused | cancelled
+	// Changes is every amount change, oldest first, kept by the server so "did it step up this year?" has an answer.
+	Changes []SipChange `json:"-" bson:"changes,omitempty"`
+}
+
+// SipChange is a SIP amount edited from From to To on a YYYY-MM-DD date.
+type SipChange struct {
+	Date string  `bson:"date"`
+	From float64 `bson:"from"`
+	To   float64 `bson:"to"`
+}
+
+// Carry makes next (the SIP as just edited) inherit prev's change history, adding one entry when the amount moved.
+func Carry(prev, next *Sip, now time.Time) {
+	if next == nil {
+		return
+	}
+	if prev != nil {
+		next.Changes = prev.Changes
+		if prev.Amount != next.Amount {
+			next.Changes = append(next.Changes[:len(next.Changes):len(next.Changes)], SipChange{ist.Midnight(now).Format("2006-01-02"), prev.Amount, next.Amount})
+		}
+	}
 }
 
 // Live is true for a SIP that still debits: counted in monthly totals, reminders and instalments.
@@ -44,6 +66,15 @@ type Fund struct {
 	JoinedAt string   `json:"joinedAt,omitempty" bson:"joinedAt,omitempty"`
 	ExitedAt string   `json:"exitedAt,omitempty" bson:"exitedAt,omitempty"`
 	Proceeds *float64 `json:"proceeds,omitempty" bson:"proceeds,omitempty"` // rupees received on exit
+	// Instalments lists each SIP instalment booked through the app, for XIRR and SIP health. What was held before the first one is
+	// Invested minus their sum, treated as bought on JoinedAt.
+	Instalments []Instalment `json:"-" bson:"instalments,omitempty"`
+}
+
+// Instalment is one SIP purchase: rupees on a YYYY-MM-DD date.
+type Instalment struct {
+	Date   string  `bson:"date"`
+	Amount float64 `bson:"amount"`
 }
 
 func (f *Fund) Exited() bool { return f.Status == "exited" }
@@ -265,6 +296,7 @@ func AddSip(f *Fund) bool {
 func buy(f *Fund, amount float64) {
 	f.Units += amount / *f.Nav
 	f.Invested += amount
+	f.Instalments = append(f.Instalments, Instalment{ist.Midnight(time.Now()).Format("2006-01-02"), amount})
 	f.AvgNav = f.Invested / f.Units
 }
 

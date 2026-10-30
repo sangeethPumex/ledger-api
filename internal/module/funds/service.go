@@ -149,6 +149,7 @@ func (s *Service) Update(ctx context.Context, id bson.ObjectID, in Input) error 
 	if in.Membership == "Genius" {
 		in.Sip = nil // the basket SIP covers it
 	}
+	Carry(cur.Sip, in.Sip, time.Now())
 	if in.Sip != nil {
 		set["sip"] = in.Sip
 	} else {
@@ -188,6 +189,11 @@ func (s *Service) SetGeniusSip(ctx context.Context, g *GeniusSip) error {
 	if g == nil {
 		_, err := s.set.UpdateByID(ctx, geniusKey, bson.M{"$unset": bson.M{"sip": ""}})
 		return err
+	}
+	if prev, err := s.GeniusSip(ctx); err != nil {
+		return err
+	} else if prev != nil {
+		Carry(&prev.Sip, &g.Sip, time.Now())
 	}
 	_, err := s.set.UpdateByID(ctx, geniusKey, bson.M{"$set": bson.M{"sip": g}}, options.UpdateOne().SetUpsert(true))
 	return err
