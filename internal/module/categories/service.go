@@ -36,16 +36,38 @@ func (s *Service) Exists(ctx context.Context, id bson.ObjectID) (bool, error) {
 	return n > 0, err
 }
 
-func (s *Service) Create(ctx context.Context, name string) (*Category, error) {
-	c := &Category{ID: bson.NewObjectID(), Name: strings.TrimSpace(name)}
+func (s *Service) Create(ctx context.Context, name, icon string) (*Category, error) {
+	c := &Category{ID: bson.NewObjectID(), Name: strings.TrimSpace(name), Icon: icon}
 	if _, err := s.col.InsertOne(ctx, c); err != nil {
 		return nil, err
 	}
 	return c, nil
 }
 
-func (s *Service) Rename(ctx context.Context, id bson.ObjectID, name string) error {
-	r, err := s.col.UpdateByID(ctx, id, bson.M{"$set": bson.M{"name": strings.TrimSpace(name)}})
+// Update changes the name and/or the icon; nil leaves one alone and an empty icon removes it.
+func (s *Service) Update(ctx context.Context, id bson.ObjectID, name, icon *string) error {
+	set, unset := bson.M{}, bson.M{}
+	if name != nil {
+		set["name"] = strings.TrimSpace(*name)
+	}
+	if icon != nil {
+		if *icon == "" {
+			unset["icon"] = ""
+		} else {
+			set["icon"] = *icon
+		}
+	}
+	upd := bson.M{}
+	if len(set) > 0 {
+		upd["$set"] = set
+	}
+	if len(unset) > 0 {
+		upd["$unset"] = unset
+	}
+	if len(upd) == 0 {
+		return mongo.ErrNoDocuments
+	}
+	r, err := s.col.UpdateByID(ctx, id, upd)
 	if err == nil && r.MatchedCount == 0 {
 		return mongo.ErrNoDocuments
 	}

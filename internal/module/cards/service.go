@@ -2,6 +2,7 @@ package cards
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,6 +17,9 @@ type Service struct {
 	col  *mongo.Collection
 	txs  *mongo.Collection // owned by the transactions module
 	emis *mongo.Collection // owned by the emis module
+	pays *mongo.Collection // payments recorded by hand, owned here
+	vens *mongo.Collection // vendors module; read only, for display names
+	cats *mongo.Collection // categories module; read only, for display names
 }
 
 func NewService(ctx context.Context, db *mongo.Database) (*Service, error) {
@@ -32,7 +36,11 @@ func NewService(ctx context.Context, db *mongo.Database) (*Service, error) {
 			})
 		}
 	}
-	return &Service{col: col, txs: txs, emis: db.Collection(emis.Collection)}, err
+	pays := db.Collection(PaymentsCollection)
+	if err == nil {
+		_, err = pays.Indexes().CreateOne(ctx, mongo.IndexModel{Keys: bson.D{{Key: "card_id", Value: 1}, {Key: "paid_at", Value: -1}}})
+	}
+	return &Service{col: col, txs: txs, emis: db.Collection(emis.Collection), pays: pays, vens: db.Collection("vendors"), cats: db.Collection("categories")}, err
 }
 
 // ErrShare is returned, with a message safe to show, when a limit cannot be shared as asked.
@@ -114,6 +122,9 @@ func (s *Service) Update(ctx context.Context, id bson.ObjectID, p Patch) error {
 	if p.Last4 != nil {
 		l := strings.TrimSpace(*p.Last4)
 		put("last4", l, l == "")
+	}
+	if p.Network != nil {
+		put("network", *p.Network, *p.Network == "")
 	}
 	if p.LimitPaise != nil {
 		put("limit_paise", *p.LimitPaise, *p.LimitPaise == 0)
@@ -272,12 +283,16 @@ func (s *Service) cycleSums(ctx context.Context, cards []Card, now time.Time) (m
 			}
 		}
 	}
-	return out, nil
+	return out, s.manualPaid(ctx, cards, now, out)
 }
 
-// Payment is one bill payment the user linked to a card: the transaction as it stands.
+// Payment is one bill payment for a card: a linked bank transaction (Source "transaction") or one recorded by hand ("manual").
+// ID is the transaction's or the record's id; only manual payments can be deleted.
 type Payment struct {
-	TxnID        bson.ObjectID  `json:"txn_id"`
+	ID           bson.ObjectID  `json:"id"`
+	Source       string         `json:"source"`
+	Note         string         `json:"note,omitempty"`
+	TxnID        *bson.ObjectID `json:"txn_id,omitempty"`
 	At           time.Time      `json:"at"` // when the payment message arrived
 	AmountPaise  int64          `json:"amount_paise"`
 	AccountID    *bson.ObjectID `json:"account_id,omitempty"` // the bank account it left
@@ -312,7 +327,22 @@ func (s *Service) Payments(ctx context.Context, id bson.ObjectID, limit int64) (
 		if at.IsZero() {
 			at = d.OccurredAt
 		}
-		out[i] = Payment{TxnID: d.ID, At: at, AmountPaise: d.AmountPaise, AccountID: d.AccountID, Bank: d.Bank, AccountLast4: d.AccountLast4, Payee: d.RawVendor}
+		out[i] = Payment{ID: d.ID, Source: "transaction", TxnID: &docs[i].ID, At: at, AmountPaise: d.AmountPaise, AccountID: d.AccountID, Bank: d.Bank, AccountLast4: d.AccountLast4, Payee: d.RawVendor}
+	}
+	mc, err := s.pays.Find(ctx, bson.M{"card_id": id}, options.Find().SetSort(bson.D{{Key: "paid_at", Value: -1}}).SetLimit(limit))
+	if err != nil {
+		return nil, err
+	}
+	var ms []ManualPayment
+	if err := mc.All(ctx, &ms); err != nil {
+		return nil, err
+	}
+	for _, m := range ms {
+		out = append(out, Payment{ID: m.ID, Source: "manual", Note: m.Note, At: m.PaidAt, AmountPaise: m.AmountPaise, AccountID: m.AccountID})
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].At.After(out[j].At) })
+	if int64(len(out)) > limit {
+		out = out[:limit]
 	}
 	return out, nil
 }
@@ -383,13 +413,17 @@ func (s *Service) Views(ctx context.Context, now time.Time) ([]View, error) {
 	if err != nil {
 		return nil, err
 	}
+	manual, err := s.manualLast(ctx)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]View, len(cards))
 	for i, c := range cards {
 		t := tot[c.ID]
 		out[i] = Compute(c, t.spent, t.n, byCard[c.ID], now)
 		out[i].Statement = BuildStatement(c, t.billed, t.paid, now)
 		out[i].AddUnpaidStatement()
-		if p, ok := last[c.ID]; ok {
+		if p := mergeLast(last[c.ID], manual[c.ID]); p.n > 0 {
 			out[i].Payments, out[i].LastPaymentAt, out[i].LastPaymentPaise = p.n, &p.at, p.paise
 		}
 	}

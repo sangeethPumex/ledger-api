@@ -25,6 +25,7 @@ type Chatter interface {
 
 type Service struct {
 	col        *mongo.Collection
+	rawCol     *mongo.Collection // stand-in raw messages for transactions typed by hand
 	raw        *raw_transactions.Service
 	vendors    *vendors.Service
 	categories *categories.Service
@@ -56,7 +57,7 @@ func NewService(ctx context.Context, db *mongo.Database, raw *raw_transactions.S
 			err = backfillCardPayments(ctx, col, cp)
 		}
 	}
-	return &Service{col: col, raw: raw, vendors: v, categories: c, accounts: acc, cards: cd, llm: llm, model: model}, err
+	return &Service{col: col, rawCol: db.Collection(raw_transactions.Collection), raw: raw, vendors: v, categories: c, accounts: acc, cards: cd, llm: llm, model: model}, err
 }
 
 // Parse turns one raw message into a transaction. Safe to call repeatedly.

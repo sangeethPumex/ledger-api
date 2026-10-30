@@ -49,7 +49,7 @@ func (c *Controller) List(w http.ResponseWriter, r *http.Request) {
 var sortFields = map[string]string{"date": "received_at", "amount": "amount_paise", "vendor": "raw_vendor", "type": "type"}
 
 // Search is the table's list: POST {page, limit, search, sort:{field,dir}, filter}, where filter takes the same keys as the GET query string
-// (q, category_id, account_id, type, direction, from, to, min, max, owed, needs_review) plus status: review | uncategorised | attention.
+// (q, category_id, account_id, card_id, type, direction, from, to, min, max, owed, needs_review) plus status: review | uncategorised | attention.
 // search is the same as filter.q; sort.field is date | amount | vendor | type (default: newest first).
 func (c *Controller) Search(w http.ResponseWriter, r *http.Request) {
 	var req httpx.PageQuery
@@ -124,4 +124,22 @@ func (c *Controller) Summary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, 200, s)
+}
+
+// Create is POST /transactions: a transaction typed in by hand.
+func (c *Controller) Create(w http.ResponseWriter, r *http.Request) {
+	var req CreateInput
+	if !httpx.Decode(w, r, &req) {
+		return
+	}
+	t, err := c.svc.Create(r.Context(), req)
+	var bad ErrPatch
+	switch {
+	case err == nil:
+		httpx.WriteJSON(w, 201, t)
+	case errors.As(err, &bad):
+		httpx.Err(w, 400, bad.Error())
+	default:
+		httpx.Err(w, 500, "could not add transaction")
+	}
 }

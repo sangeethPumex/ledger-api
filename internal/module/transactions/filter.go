@@ -14,6 +14,7 @@ import (
 type Filter struct {
 	NeedsReview *bool
 	AccountID   *bson.ObjectID
+	CardID      *bson.ObjectID // spends made with this credit card
 	CategoryID  *bson.ObjectID
 	Q           string    // text found in the vendor or UPI id, any case
 	Type        string    // one of validTypes
@@ -38,6 +39,9 @@ func (f Filter) Query() bson.M {
 	}
 	if f.AccountID != nil {
 		q["account_id"] = *f.AccountID
+	}
+	if f.CardID != nil {
+		q["card_id"] = *f.CardID
 	}
 	if f.CategoryID != nil {
 		q["category_id"] = *f.CategoryID
@@ -104,7 +108,7 @@ func ParseFilter(v url.Values) (f Filter, msg string) {
 		}
 		f.Limit = n
 	}
-	for name, dst := range map[string]**bson.ObjectID{"account_id": &f.AccountID, "category_id": &f.CategoryID} {
+	for name, dst := range map[string]**bson.ObjectID{"account_id": &f.AccountID, "card_id": &f.CardID, "category_id": &f.CategoryID} {
 		if s := v.Get(name); s != "" {
 			id, err := bson.ObjectIDFromHex(s)
 			if err != nil {

@@ -17,6 +17,7 @@ func NewController(svc *Service) *Controller { return &Controller{svc} }
 func (c *Controller) Create(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name string `json:"name"`
+		Icon string `json:"icon"`
 	}
 	if !httpx.Decode(w, r, &req) {
 		return
@@ -25,7 +26,11 @@ func (c *Controller) Create(w http.ResponseWriter, r *http.Request) {
 		httpx.Err(w, 400, "name required")
 		return
 	}
-	cat, err := c.svc.Create(r.Context(), req.Name)
+	if !ValidIcon(req.Icon) {
+		httpx.Err(w, 400, "icon is not valid")
+		return
+	}
+	cat, err := c.svc.Create(r.Context(), req.Name, req.Icon)
 	switch {
 	case mongo.IsDuplicateKeyError(err):
 		httpx.Err(w, 409, "category exists")
@@ -76,16 +81,24 @@ func (c *Controller) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Name string `json:"name"`
+		Name *string `json:"name"`
+		Icon *string `json:"icon"`
 	}
 	if !httpx.Decode(w, r, &req) {
 		return
 	}
-	if strings.TrimSpace(req.Name) == "" {
+	switch {
+	case req.Name == nil && req.Icon == nil:
+		httpx.Err(w, 400, "nothing to change")
+		return
+	case req.Name != nil && strings.TrimSpace(*req.Name) == "":
 		httpx.Err(w, 400, "name required")
 		return
+	case req.Icon != nil && !ValidIcon(*req.Icon):
+		httpx.Err(w, 400, "icon is not valid")
+		return
 	}
-	switch err := c.svc.Rename(r.Context(), id, req.Name); {
+	switch err := c.svc.Update(r.Context(), id, req.Name, req.Icon); {
 	case err == nil:
 		w.WriteHeader(204)
 	case err == mongo.ErrNoDocuments:

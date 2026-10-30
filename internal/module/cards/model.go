@@ -21,14 +21,16 @@ const (
 // Card is a credit card or a pay-later line (Amazon Pay Later, Simpl...). Bank and Last4 are optional; without Last4 no SMS is linked to it.
 // Money is paise, like transactions. BillingDay is the statement date and DueDay the last day to pay, both 1-31 or 0 when unknown.
 type Card struct {
-	ID         bson.ObjectID `bson:"_id" json:"id"`
-	Name       string        `bson:"name" json:"name"`
-	Kind       string        `bson:"kind,omitempty" json:"kind"`
-	Bank       string        `bson:"bank,omitempty" json:"bank,omitempty"`
-	Last4      string        `bson:"last4,omitempty" json:"last4,omitempty"`
-	LimitPaise int64         `bson:"limit_paise,omitempty" json:"limit_paise,omitempty"`
-	BillingDay int           `bson:"billing_day,omitempty" json:"billing_day,omitempty"`
-	DueDay     int           `bson:"due_day,omitempty" json:"due_day,omitempty"`
+	ID    bson.ObjectID `bson:"_id" json:"id"`
+	Name  string        `bson:"name" json:"name"`
+	Kind  string        `bson:"kind,omitempty" json:"kind"`
+	Bank  string        `bson:"bank,omitempty" json:"bank,omitempty"`
+	Last4 string        `bson:"last4,omitempty" json:"last4,omitempty"`
+	// Network is the card scheme shown on the card face: visa, mastercard, rupay, amex, diners or empty when unknown.
+	Network    string `bson:"network,omitempty" json:"network,omitempty"`
+	LimitPaise int64  `bson:"limit_paise,omitempty" json:"limit_paise,omitempty"`
+	BillingDay int    `bson:"billing_day,omitempty" json:"billing_day,omitempty"`
+	DueDay     int    `bson:"due_day,omitempty" json:"due_day,omitempty"`
 	// Apr is the yearly interest rate in percent charged on an unpaid bill. Zero means DefaultApr.
 	Apr float64 `bson:"apr,omitempty" json:"apr,omitempty"`
 	// OutstandingPaise is what the lender's app says is owed. When set it replaces the figure worked out from transactions,
@@ -48,6 +50,13 @@ func validLast4(l string) bool {
 func validDay(d int) bool     { return d >= 0 && d <= 31 }
 func validApr(a float64) bool { return a >= 0 && a <= 100 } // also false for NaN
 func validKind(k string) bool { return k == KindCredit || k == KindPayLater }
+func validNetwork(n string) bool {
+	switch n {
+	case "", "visa", "mastercard", "rupay", "amex", "diners":
+		return true
+	}
+	return false
+}
 
 // Validate returns a message when the card is unusable.
 func (c *Card) Validate() string {
@@ -58,6 +67,8 @@ func (c *Card) Validate() string {
 		return "kind must be credit or paylater"
 	case !validLast4(c.Last4):
 		return "last4 must be 4 digits"
+	case !validNetwork(c.Network):
+		return "network must be visa, mastercard, rupay, amex or diners"
 	case c.LimitPaise < 0 || c.LimitPaise > maxPaise:
 		return "limit is out of range"
 	case !validDay(c.BillingDay) || !validDay(c.DueDay):
@@ -77,6 +88,7 @@ type Patch struct {
 	Kind             *string  `json:"kind"`
 	Bank             *string  `json:"bank"`
 	Last4            *string  `json:"last4"`
+	Network          *string  `json:"network"`
 	LimitPaise       *int64   `json:"limit_paise"`
 	BillingDay       *int     `json:"billing_day"`
 	DueDay           *int     `json:"due_day"`
@@ -93,6 +105,8 @@ func (p *Patch) Validate() string {
 		return "kind must be credit or paylater"
 	case p.Last4 != nil && !validLast4(*p.Last4):
 		return "last4 must be 4 digits"
+	case p.Network != nil && !validNetwork(*p.Network):
+		return "network must be visa, mastercard, rupay, amex or diners"
 	case p.LimitPaise != nil && (*p.LimitPaise < 0 || *p.LimitPaise > maxPaise):
 		return "limit is out of range"
 	case p.BillingDay != nil && !validDay(*p.BillingDay), p.DueDay != nil && !validDay(*p.DueDay):
@@ -136,7 +150,7 @@ type View struct {
 	SharedWithName string   `json:"shared_with_name,omitempty"` // the card that owns the limit, on a card that shares
 	SharedCards    []string `json:"shared_cards"`               // names of the other cards in the group
 	GroupUsedPaise int64    `json:"group_used_paise,omitempty"`
-	// The bill payments linked to this card from transactions: how many, and the latest.
+	// Bill payments counted for this card, from linked transactions and recorded by hand: how many, and the latest.
 	Payments         int        `json:"payments"`
 	LastPaymentAt    *time.Time `json:"last_payment_at,omitempty"`
 	LastPaymentPaise int64      `json:"last_payment_paise,omitempty"`

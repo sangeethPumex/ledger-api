@@ -16,17 +16,19 @@ const (
 // Statement is the last closed bill and what is still owed on it. Estimated from transactions: bill payments are counted only when
 // their SMS carries the card number. Money is paise.
 type Statement struct {
-	From        string  `json:"from"` // first day billed
-	To          string  `json:"to"`   // statement date
-	BilledPaise int64   `json:"billed_paise"`
-	PaidPaise   int64   `json:"paid_paise"` // bill payments since the statement date
-	UnpaidPaise int64   `json:"unpaid_paise"`
-	MinDuePaise int64   `json:"min_due_paise"`
-	DueDate     string  `json:"due_date"`
-	DaysToDue   int     `json:"days_to_due"` // negative once past
-	Overdue     bool    `json:"overdue"`
-	Remind      bool    `json:"remind"` // unpaid and due within remindDays (or overdue): pay in full
-	Apr         float64 `json:"apr"`
+	From        string `json:"from"` // first day billed
+	To          string `json:"to"`   // statement date
+	BilledPaise int64  `json:"billed_paise"`
+	PaidPaise   int64  `json:"paid_paise"` // bill payments since the statement date
+	UnpaidPaise int64  `json:"unpaid_paise"`
+	MinDuePaise int64  `json:"min_due_paise"`
+	DueDate     string `json:"due_date"`
+	DaysToDue   int    `json:"days_to_due"` // negative once past
+	Overdue     bool   `json:"overdue"`
+	// Status is where the bill stands: no_due (nothing billed), paid, partial, unpaid or overdue.
+	Status string  `json:"status"`
+	Remind bool    `json:"remind"` // unpaid and due within remindDays (or overdue): pay in full
+	Apr    float64 `json:"apr"`
 	// One month of interest on what stays unpaid: after paying only the minimum, and after paying nothing.
 	InterestIfMinPaise     int64 `json:"interest_if_min_paise"`
 	InterestIfSkippedPaise int64 `json:"interest_if_skipped_paise"`
@@ -75,6 +77,18 @@ func BuildStatement(c Card, billed, paid int64, now time.Time) *Statement {
 		s.Apr = DefaultApr
 	}
 	s.Overdue = unpaid > 0 && s.DaysToDue < 0
+	switch {
+	case billed == 0:
+		s.Status = "no_due"
+	case unpaid == 0:
+		s.Status = "paid"
+	case s.Overdue:
+		s.Status = "overdue"
+	case s.PaidPaise > 0:
+		s.Status = "partial"
+	default:
+		s.Status = "unpaid"
+	}
 	s.Remind = unpaid > 0 && s.DaysToDue <= remindDays
 	month := func(p int64) int64 { return int64(float64(p)*s.Apr/1200 + 0.5) }
 	s.InterestIfMinPaise, s.InterestIfSkippedPaise = month(unpaid-s.MinDuePaise), month(unpaid)

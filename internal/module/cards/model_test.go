@@ -184,3 +184,35 @@ func TestAddUnpaidStatement(t *testing.T) {
 		t.Error("manual outstanding already includes the bill")
 	}
 }
+
+func TestStatementStatus(t *testing.T) {
+	c := Card{BillingDay: 20, DueDay: 7}
+	now := at(2026, 10, 28) // statement 20 Oct, due 7 Nov
+	if s := BuildStatement(c, 10_000_00, 2_000_00, now); s.Status != "partial" || s.UnpaidPaise != 8_000_00 {
+		t.Errorf("partial: %+v", s)
+	}
+	if s := BuildStatement(c, 10_000_00, 0, now); s.Status != "unpaid" {
+		t.Errorf("unpaid: %+v", s)
+	}
+	if s := BuildStatement(c, 10_000_00, 12_000_00, now); s.Status != "paid" || s.UnpaidPaise != 0 {
+		t.Errorf("paid: %+v", s)
+	}
+	if s := BuildStatement(c, 0, 0, now); s.Status != "no_due" {
+		t.Errorf("no_due: %+v", s)
+	}
+	if s := BuildStatement(Card{BillingDay: 20, DueDay: 5}, 10_000_00, 2_000_00, at(2026, 11, 8)); s.Status != "overdue" {
+		t.Errorf("overdue: %+v", s)
+	}
+}
+
+func TestPaymentInputValidate(t *testing.T) {
+	now := at(2026, 10, 28)
+	if m := (&PaymentInput{AmountPaise: 100, PaidAt: now}).Validate(now); m != "" {
+		t.Errorf("valid payment rejected: %s", m)
+	}
+	for _, p := range []PaymentInput{{PaidAt: now}, {AmountPaise: -1, PaidAt: now}, {AmountPaise: 100}, {AmountPaise: 100, PaidAt: now.AddDate(0, 0, 3)}, {AmountPaise: 100, PaidAt: now, AccountID: "x"}} {
+		if p.Validate(now) == "" {
+			t.Errorf("accepted %+v", p)
+		}
+	}
+}

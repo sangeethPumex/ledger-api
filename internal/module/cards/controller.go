@@ -4,8 +4,10 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
+	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"ledger-backend/internal/httpx"
@@ -97,4 +99,71 @@ func (c *Controller) Update(w http.ResponseWriter, r *http.Request) {
 	default:
 		httpx.Err(w, 500, "could not update card")
 	}
+}
+
+// RecordPayment is POST /cards/{id}/payments: record a bill payment by hand. No bank transaction is created.
+func (c *Controller) RecordPayment(w http.ResponseWriter, r *http.Request) {
+	id, ok := httpx.PathID(w, r)
+	if !ok {
+		return
+	}
+	var req PaymentInput
+	if !httpx.Decode(w, r, &req) {
+		return
+	}
+	if msg := req.Validate(time.Now()); msg != "" {
+		httpx.Err(w, 400, msg)
+		return
+	}
+	p, err := c.svc.RecordPayment(r.Context(), id, req)
+	switch {
+	case err == mongo.ErrNoDocuments:
+		httpx.Err(w, 404, "card not found")
+	case err != nil:
+		log.Printf("cards: record payment: %v", err)
+		httpx.Err(w, 500, "could not record payment")
+	default:
+		httpx.WriteJSON(w, 201, map[string]string{"id": p.ID.Hex()})
+	}
+}
+
+// DeletePayment is DELETE /cards/{id}/payments/{pid}: remove a payment recorded by hand.
+func (c *Controller) DeletePayment(w http.ResponseWriter, r *http.Request) {
+	id, ok := httpx.PathID(w, r)
+	if !ok {
+		return
+	}
+	pid, err := bson.ObjectIDFromHex(r.PathValue("pid"))
+	if err != nil {
+		httpx.Err(w, 400, "invalid payment id")
+		return
+	}
+	switch err := c.svc.DeletePayment(r.Context(), id, pid); {
+	case err == nil:
+		w.WriteHeader(204)
+	case err == mongo.ErrNoDocuments:
+		httpx.Err(w, 404, "payment not found (only payments recorded by hand can be removed)")
+	default:
+		log.Printf("cards: delete payment: %v", err)
+		httpx.Err(w, 500, "could not remove payment")
+	}
+}
+
+// Activity is GET /cards/{id}/activity: the card's latest spends, refunds and payments.
+func (c *Controller) Activity(w http.ResponseWriter, r *http.Request) {
+	id, ok := httpx.PathID(w, r)
+	if !ok {
+		return
+	}
+	limit := int64(8)
+	if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && n > 0 {
+		limit = int64(min(n, 200))
+	}
+	a, err := c.svc.Activity(r.Context(), id, limit)
+	if err != nil {
+		log.Printf("cards: activity: %v", err)
+		httpx.Err(w, 500, "could not load card activity")
+		return
+	}
+	httpx.WriteJSON(w, 200, a)
 }
