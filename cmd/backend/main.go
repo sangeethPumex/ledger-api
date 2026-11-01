@@ -14,6 +14,7 @@ import (
 	"ledger-backend/internal/middleware"
 	"ledger-backend/internal/module/accounts"
 	"ledger-backend/internal/module/alerts"
+	"ledger-backend/internal/module/brainjogger"
 	"ledger-backend/internal/module/cards"
 	"ledger-backend/internal/module/budgets"
 	"ledger-backend/internal/module/categories"
@@ -92,6 +93,8 @@ func main() {
 	check(err)
 	profSvc := profile.NewService(db)
 	mandSvc := mandates.NewService(db)
+	jogSvc := brainjogger.NewService(db)
+	go jogSvc.Run(context.Background(), 30*time.Second)
 	budSvc, err := budgets.NewService(ctx, db)
 	check(err)
 	viewSvc, err := views.NewService(ctx, db)
@@ -139,6 +142,7 @@ func main() {
 	portfolio.RegisterRoutes(mux, portfolio.NewController(portSvc), auth)
 	alerts.RegisterRoutes(mux, alerts.NewController(alertSvc), auth)
 	dashboard.RegisterRoutes(mux, dashboard.NewController(dashSvc), auth)
+	brainjogger.RegisterRoutes(mux, brainjogger.NewController(jogSvc), auth)
 	budgets.RegisterRoutes(mux, budgets.NewController(budSvc), auth)
 	insights.RegisterRoutes(mux, insights.NewController(insights.NewService(db)), auth)
 	views.RegisterRoutes(mux, views.NewController(viewSvc), auth)
