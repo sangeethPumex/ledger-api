@@ -28,8 +28,22 @@ func (c *Controller) Reparse(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, mongo.ErrNoDocuments):
 		httpx.Err(w, 404, "message not found")
 	default:
-		httpx.Err(w, 502, "parse failed; see fail_reason on the raw message")
+		httpx.Err(w, 502, err.Error()) // the raw cause; parse's causes carry no message text
 	}
+}
+
+// Unparsed lists the ids of messages still waiting to be parsed or that failed, oldest first.
+func (c *Controller) Unparsed(w http.ResponseWriter, r *http.Request) {
+	ids, err := c.svc.raw.Unparsed(r.Context(), 100)
+	if err != nil {
+		httpx.Err(w, 500, "could not list unparsed messages")
+		return
+	}
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		out[i] = id.Hex()
+	}
+	httpx.WriteJSON(w, 200, out)
 }
 
 func (c *Controller) List(w http.ResponseWriter, r *http.Request) {

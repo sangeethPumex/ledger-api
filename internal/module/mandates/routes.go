@@ -7,5 +7,6 @@ func RegisterRoutes(mux *http.ServeMux, c *Controller, auth func(http.Handler) h
 	mux.Handle("GET /mandates/suggestions", auth(http.HandlerFunc(c.Suggestions)))
 	mux.Handle("POST /mandates", auth(http.HandlerFunc(c.Create)))
 	mux.Handle("PUT /mandates/{id}", auth(http.HandlerFunc(c.Update)))
+	mux.Handle("POST /mandates/{id}/paid", auth(http.HandlerFunc(c.MarkPaid)))
 	mux.Handle("DELETE /mandates/{id}", auth(http.HandlerFunc(c.Delete)))
 }

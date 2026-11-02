@@ -19,14 +19,32 @@ const Collection = "mandates"
 var frequencies = map[string]int{"monthly": 1, "quarterly": 3, "yearly": 12, "one-off": 0}
 
 type Mandate struct {
-	ID          bson.ObjectID  `bson:"_id" json:"id"`
-	Name        string         `bson:"name" json:"name"`
-	AmountPaise int64          `bson:"amount_paise" json:"amount_paise"`
-	Frequency   string         `bson:"frequency" json:"frequency"`
-	NextDue     time.Time      `bson:"next_due" json:"-"` // IST midnight of a due date; recurring ones roll forward from it
-	AccountID   *bson.ObjectID `bson:"account_id,omitempty" json:"account_id,omitempty"`
-	CategoryID  *bson.ObjectID `bson:"category_id,omitempty" json:"category_id,omitempty"`
-	CreatedAt   time.Time      `bson:"created_at" json:"created_at"`
+	ID          bson.ObjectID            `bson:"_id" json:"id"`
+	Name        string                   `bson:"name" json:"name"`
+	AmountPaise int64                    `bson:"amount_paise" json:"amount_paise"`
+	Frequency   string                   `bson:"frequency" json:"frequency"`
+	NextDue     time.Time                `bson:"next_due" json:"-"` // IST midnight of a due date; recurring ones roll forward from it
+	AccountID   *bson.ObjectID           `bson:"account_id,omitempty" json:"account_id,omitempty"`
+	CategoryID  *bson.ObjectID           `bson:"category_id,omitempty" json:"category_id,omitempty"`
+	CreatedAt   time.Time                `bson:"created_at" json:"created_at"`
+	Paid        map[string]bson.ObjectID `bson:"paid,omitempty" json:"-"` // due date (YYYY-MM-DD) -> transaction the user linked as that payment
+}
+
+// graceDays is how far past its due date a payment is still checked; older misses drop off the list.
+// ponytail: a yearly mandate missed for over 45 days stops warning; widen if that matters.
+const graceDays = 45
+
+// LatestDue is the latest due date on or before today, if it is recent enough to check for a payment.
+func (m Mandate) LatestDue(now time.Time) (time.Time, bool) {
+	today, step := ist.Midnight(now), frequencies[m.Frequency]
+	var last time.Time
+	for n := 0; !due(m.NextDue, step, n).After(today); n++ {
+		last = due(m.NextDue, step, n)
+		if step == 0 {
+			break
+		}
+	}
+	return last, !last.IsZero() && !last.Before(today.AddDate(0, 0, -graceDays))
 }
 
 // Input is the body of a create or update; NextDue is YYYY-MM-DD.
@@ -108,6 +126,10 @@ type View struct {
 	Days    int    `json:"days"`
 	// SetAsidePaise is what to put away each month to meet it: the amount for a monthly one, a twelfth of a yearly one, and so on.
 	SetAsidePaise int64 `json:"set_aside_paise"`
+	// Payment check for the latest due date that has arrived: "paid" (a transaction matched or was linked) or "unpaid"; empty when none is recent.
+	LastDue string `json:"last_due,omitempty"`
+	Status  string `json:"status,omitempty"`
+	TxnID   string `json:"txn_id,omitempty"`
 }
 
 type Occ struct {

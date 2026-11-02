@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 
 	"ledger-backend/internal/httpx"
@@ -75,6 +76,35 @@ func (c *Controller) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	done(w, c.svc.Delete(r.Context(), id), "delete")
+}
+
+// MarkPaid links a transaction to one due date of a mandate (empty transaction_id unlinks it).
+func (c *Controller) MarkPaid(w http.ResponseWriter, r *http.Request) {
+	id, ok := httpx.PathID(w, r)
+	if !ok {
+		return
+	}
+	var in struct {
+		Due           string `json:"due"`
+		TransactionID string `json:"transaction_id"`
+	}
+	if !httpx.Decode(w, r, &in) {
+		return
+	}
+	var txn *bson.ObjectID
+	if in.TransactionID != "" {
+		t, err := bson.ObjectIDFromHex(in.TransactionID)
+		if err != nil {
+			httpx.Err(w, 400, "transaction_id is not a valid id")
+			return
+		}
+		txn = &t
+	}
+	if _, err := time.Parse(day, in.Due); err != nil {
+		httpx.Err(w, 400, "due must be a date like 2026-12-31")
+		return
+	}
+	done(w, c.svc.MarkPaid(r.Context(), id, in.Due, txn), "update")
 }
 
 // done replies 204 for success, 404 for a missing mandate and 500 otherwise.

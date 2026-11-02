@@ -89,3 +89,22 @@ func TestParse(t *testing.T) {
 		}
 	}
 }
+
+func TestLatestDue(t *testing.T) {
+	now := d("2026-11-02")
+	for _, c := range []struct {
+		m    Mandate
+		want string // empty = nothing to check
+	}{
+		{Mandate{Frequency: "monthly", NextDue: d("2026-08-31")}, "2026-10-31"},
+		{Mandate{Frequency: "monthly", NextDue: d("2026-11-02")}, "2026-11-02"},
+		{Mandate{Frequency: "monthly", NextDue: d("2026-11-10")}, ""},
+		{Mandate{Frequency: "one-off", NextDue: d("2026-10-20")}, "2026-10-20"},
+		{Mandate{Frequency: "one-off", NextDue: d("2026-01-20")}, ""}, // past the grace window
+	} {
+		got, ok := c.m.LatestDue(now)
+		if (c.want == "") == ok || (ok && got.Format(day) != c.want) {
+			t.Errorf("%s %s: got %v %v, want %q", c.m.Frequency, c.m.NextDue.Format(day), got.Format(day), ok, c.want)
+		}
+	}
+}

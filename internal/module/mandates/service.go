@@ -2,6 +2,7 @@ package mandates
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -33,7 +34,61 @@ func (s *Service) Plan(ctx context.Context, now time.Time) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	return BuildPlan(ms, now), nil
+	p := BuildPlan(ms, now)
+	for i := range p.Items {
+		if err := s.check(ctx, &p.Items[i], now); err != nil {
+			return Plan{}, err
+		}
+	}
+	return p, nil
+}
+
+// check sets v's payment status for its latest due date: the transaction the user linked, else a debit of the same amount
+// (from the mandate's account when it names one) made from 3 days before the due date until now.
+func (s *Service) check(ctx context.Context, v *View, now time.Time) error {
+	d, ok := v.LatestDue(now)
+	if !ok {
+		return nil
+	}
+	v.LastDue, v.Status = d.Format(day), "unpaid"
+	if id, linked := v.Paid[v.LastDue]; linked {
+		v.Status, v.TxnID = "paid", id.Hex()
+		return nil
+	}
+	q := bson.M{"direction": bson.M{"$ne": "credit"}, "amount_paise": v.AmountPaise, "occurred_at": bson.M{"$gte": d.AddDate(0, 0, -3).UTC()}}
+	if v.AccountID != nil {
+		q["account_id"] = *v.AccountID
+	}
+	var t struct {
+		ID bson.ObjectID `bson:"_id"`
+	}
+	switch err := s.txs.FindOne(ctx, q, options.FindOne().SetProjection(bson.M{"_id": 1})).Decode(&t); {
+	case err == nil:
+		v.Status, v.TxnID = "paid", t.ID.Hex()
+	case !errors.Is(err, mongo.ErrNoDocuments):
+		return err
+	}
+	return nil
+}
+
+// MarkPaid links a transaction as the payment for the mandate's due date; an empty txn removes the link.
+func (s *Service) MarkPaid(ctx context.Context, id bson.ObjectID, dueDate string, txn *bson.ObjectID) error {
+	key := "paid." + dueDate
+	upd := bson.M{"$unset": bson.M{key: ""}}
+	if txn != nil {
+		if n, err := s.txs.CountDocuments(ctx, bson.M{"_id": *txn}); err != nil || n == 0 {
+			if err == nil {
+				err = mongo.ErrNoDocuments
+			}
+			return err
+		}
+		upd = bson.M{"$set": bson.M{key: *txn}}
+	}
+	r, err := s.col.UpdateByID(ctx, id, upd)
+	if err == nil && r.MatchedCount == 0 {
+		return mongo.ErrNoDocuments
+	}
+	return err
 }
 
 func (s *Service) Create(ctx context.Context, m Mandate) error {

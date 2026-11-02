@@ -46,7 +46,16 @@ func (s *Service) Messages(ctx context.Context, ids []bson.ObjectID) (map[bson.O
 
 // Pending returns the oldest unparsed message ids, oldest first.
 func (s *Service) Pending(ctx context.Context, limit int64) ([]bson.ObjectID, error) {
-	cur, err := s.col.Find(ctx, bson.M{"status": StatusPending},
+	return s.ids(ctx, bson.M{"status": StatusPending}, limit)
+}
+
+// Unparsed is Pending plus the failed ones: everything a manual parse can still act on.
+func (s *Service) Unparsed(ctx context.Context, limit int64) ([]bson.ObjectID, error) {
+	return s.ids(ctx, bson.M{"status": bson.M{"$in": bson.A{StatusPending, StatusFailed}}}, limit)
+}
+
+func (s *Service) ids(ctx context.Context, filter bson.M, limit int64) ([]bson.ObjectID, error) {
+	cur, err := s.col.Find(ctx, filter,
 		options.Find().SetSort(bson.D{{Key: "received_at", Value: 1}}).SetLimit(limit).SetProjection(bson.M{"_id": 1}))
 	if err != nil {
 		return nil, err
