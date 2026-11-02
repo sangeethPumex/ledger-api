@@ -8,5 +8,6 @@ func RegisterRoutes(mux *http.ServeMux, c *Controller, auth func(http.Handler) h
 	mux.Handle("GET /transactions", auth(http.HandlerFunc(c.List)))
 	mux.Handle("POST /transactions/search", auth(http.HandlerFunc(c.Search)))
 	mux.Handle("PATCH /transactions/{id}", auth(http.HandlerFunc(c.Patch)))
+	mux.Handle("DELETE /transactions/{id}", auth(http.HandlerFunc(c.Delete)))
 	mux.Handle("POST /raw-transactions/{id}/parse", auth(http.HandlerFunc(c.Reparse)))
 }

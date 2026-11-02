@@ -85,6 +85,32 @@ func (s *Service) WatchInserts(ctx context.Context, onInsert func()) {
 	}
 }
 
+// KeepFor is how long a raw message is kept; the parsed transaction outlives it.
+const KeepFor = 5 * 24 * time.Hour
+
+// Sweep deletes messages older than KeepFor every interval, until ctx ends. Pending ones are kept: they are not parsed yet.
+func (s *Service) Sweep(ctx context.Context, interval time.Duration) {
+	for {
+		r, err := s.col.DeleteMany(ctx, bson.M{"received_at": bson.M{"$lt": time.Now().Add(-KeepFor)}, "status": bson.M{"$ne": StatusPending}})
+		if err != nil {
+			log.Printf("raw sweep: %v", err)
+		} else if r.DeletedCount > 0 {
+			log.Printf("raw sweep: removed %d messages", r.DeletedCount)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(interval):
+		}
+	}
+}
+
+// Delete removes one message; a missing one is fine.
+func (s *Service) Delete(ctx context.Context, id bson.ObjectID) error {
+	_, err := s.col.DeleteOne(ctx, bson.M{"_id": id})
+	return err
+}
+
 // RetryFailed puts every failed message back in the queue; called once at startup.
 func (s *Service) RetryFailed(ctx context.Context) (int64, error) {
 	r, err := s.col.UpdateMany(ctx, bson.M{"status": StatusFailed},

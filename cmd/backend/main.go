@@ -106,6 +106,8 @@ func main() {
 	// One row per day (balances, holdings, net worth, spending): fills the past from the transactions, then keeps today's row live.
 	go snapSvc.Run(context.Background(), 15*time.Minute)
 
+	go rawSvc.Sweep(context.Background(), time.Hour) // raw messages go after 5 days; transactions stay
+
 	// Parse messages as ledger-api inserts them (change stream); sequential, so one LLM call at a time.
 	// The watcher also fires on every (re)connect, which catches up anything missed while we were down.
 	trigger := make(chan struct{}, 1)

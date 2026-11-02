@@ -117,6 +117,21 @@ func (c *Controller) Patch(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (c *Controller) Delete(w http.ResponseWriter, r *http.Request) {
+	id, ok := httpx.PathID(w, r)
+	if !ok {
+		return
+	}
+	switch err := c.svc.Delete(r.Context(), id); {
+	case err == nil:
+		w.WriteHeader(204)
+	case errors.Is(err, mongo.ErrNoDocuments):
+		httpx.Err(w, 404, "transaction not found")
+	default:
+		httpx.Err(w, 500, "could not delete transaction")
+	}
+}
+
 func (c *Controller) Summary(w http.ResponseWriter, r *http.Request) {
 	s, err := c.svc.Summary(r.Context())
 	if err != nil {

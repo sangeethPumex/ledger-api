@@ -131,6 +131,15 @@ func planSplits(t Transaction, parts []Split) error {
 	return nil
 }
 
+// Delete removes a transaction (e.g. a duplicate SMS) and its raw message, so nothing re-parses it.
+func (s *Service) Delete(ctx context.Context, id bson.ObjectID) error {
+	var t Transaction
+	if err := s.col.FindOneAndDelete(ctx, bson.M{"_id": id}).Decode(&t); err != nil {
+		return err
+	}
+	return s.raw.Delete(ctx, t.RawID)
+}
+
 func (s *Service) Patch(ctx context.Context, id bson.ObjectID, p Patch) error {
 	var cat, card *bson.ObjectID
 	var clearCard bool
