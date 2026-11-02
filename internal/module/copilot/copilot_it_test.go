@@ -159,6 +159,12 @@ func TestServiceEndToEnd(t *testing.T) {
 	}
 	must(s.DeleteWant(ctx, ws[0].ID))
 
+	// The mode is universal: saving it changes the numbers straight away.
+	must(s.SetMode(ctx, "ultra_poor"))
+	if o, err = s.Overview(ctx, now); err != nil || o.Safe.Mode.Months != 12 {
+		t.Fatalf("mode = %+v, %v", o.Safe.Mode, err)
+	}
+
 	// The AI's tools answer in rupees.
 	res, err := s.Tool(ctx, "purchase_check", 500, "", 0, now)
 	must(err)

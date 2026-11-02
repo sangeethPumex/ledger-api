@@ -45,6 +45,20 @@ func (c *Controller) Check(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, 200, st.Check(in))
 }
 
+func (c *Controller) SetMode(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Mode string `json:"mode"`
+	}
+	if !httpx.Decode(w, r, &in) {
+		return
+	}
+	if !ValidMode(in.Mode) {
+		httpx.Err(w, 400, "unknown mode")
+		return
+	}
+	reply(w, c.svc.SetMode(r.Context(), in.Mode), "mode")
+}
+
 func (c *Controller) Inbox(w http.ResponseWriter, r *http.Request) {
 	in, err := c.svc.Inbox(r.Context(), time.Now())
 	if err != nil {
@@ -156,6 +170,7 @@ func reply(w http.ResponseWriter, err error, what string) {
 func RegisterRoutes(mux *http.ServeMux, c *Controller, auth func(http.Handler) http.Handler) {
 	h := func(f http.HandlerFunc) http.Handler { return auth(f) }
 	mux.Handle("GET /copilot", h(c.Overview))
+	mux.Handle("PUT /copilot/mode", h(c.SetMode))
 	mux.Handle("POST /copilot/check", h(c.Check))
 	mux.Handle("GET /copilot/nudges", h(c.Inbox))
 	mux.Handle("POST /copilot/nudges/{id}", h(c.SetNudge))

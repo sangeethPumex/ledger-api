@@ -18,10 +18,9 @@ import (
 )
 
 const (
-	horizon        = 150           // days the balance is projected; a 90-day search for "when can I buy this" plus one more pay period
-	safeFloor      = int64(30_000) // ₹300/day: below this a purchase is never "buy now"
-	waitSearchDays = 90            // how far ahead a "wait" is looked for
-	skipWantDays   = 60            // a want that cannot pass within this long is a skip, not a wait
+	horizon        = 482 // days the balance is projected: a 90-day search for "when can I buy this", the longest mode (a year), and one pay period
+	waitSearchDays = 90  // how far ahead a "wait" is looked for
+	skipWantDays   = 60  // a want that cannot pass within this long is a skip, not a wait
 	coolingDays    = 14
 	emiRate        = 16.0 // % a year assumed for the EMI comparison, with emiFee
 	emiFee         = 0.01
@@ -64,6 +63,7 @@ type BudgetRow struct {
 // State is every input the engine reads. The service fills it from the other modules.
 type State struct {
 	Now               time.Time
+	Mode              string // key of the chosen Mode
 	Cash, Buffer      int64
 	Salary            int64
 	SalaryDay         int
@@ -196,8 +196,9 @@ type Event struct {
 	Offset int    `json:"offset"`
 	Date   string `json:"date"`
 	Name   string `json:"name"`
-	Paise  int64  `json:"paise"` // negative going out
-	Kind   string `json:"kind"`  // salary | mandate | emi | sip | card | renewal
+	Paise  int64  `json:"paise"`           // negative going out
+	Kind   string `json:"kind"`            // salary | mandate | emi | sip | card | renewal
+	Count  int    `json:"count,omitempty"` // how many payments Paise adds up, when grouped
 }
 
 // Events lists every known movement in the next h days, soonest first. A bill past its due date counts as today.
@@ -206,7 +207,7 @@ func (st *State) Events(h int) []Event {
 	var out []Event
 	add := func(off int, name string, paise int64, kind string) {
 		if off <= h && paise != 0 {
-			out = append(out, Event{off, st.date(off).Format("2006-01-02"), name, paise, kind})
+			out = append(out, Event{Offset: off, Date: st.date(off).Format("2006-01-02"), Name: name, Paise: paise, Kind: kind})
 		}
 	}
 	for off := 1; off <= h; off++ {
@@ -275,7 +276,58 @@ func (st *State) balances(ev []Event, h int) []int64 {
 	return b
 }
 
-// Safe is the core number: what can go today without touching what is already spoken for.
+// Mode is how hard the money has to last. Months is the goal: cash should carry everything for that long with no salary.
+// FloorPct is a share of the usual day's spending, the least a day can be budgeted while that goal is out of reach.
+type Mode struct {
+	Key      string `json:"key"`
+	Label    string `json:"label"`
+	Months   int    `json:"months"`
+	FloorPct int64  `json:"floorPct"`
+}
+
+const DefaultMode = "normal"
+
+var Modes = []Mode{
+	{"ultra_poor", "Ultra poor", 12, 30},
+	{"saving", "Saving", 6, 50},
+	{DefaultMode, "Normal", 3, 80},
+	{"luxury", "Luxury", 1, 100},
+}
+
+// ValidMode reports whether key names a mode.
+func ValidMode(key string) bool {
+	for _, m := range Modes {
+		if m.Key == key {
+			return true
+		}
+	}
+	return false
+}
+
+func (st *State) mode() Mode {
+	for _, m := range Modes {
+		if m.Key == st.Mode {
+			return m
+		}
+	}
+	return Modes[2]
+}
+
+// budget splits cash over the mode's months. after is the offset the cash is measured at: only what falls due later is taken off.
+// SIPs are left out because they pause when the salary stops. goal is the daily figure that truly reaches the target; floor is the mode's minimum.
+func (st *State) budget(cash int64, after int, ev []Event) (goal, floor, committed int64) {
+	m := st.mode()
+	days := m.Months * 30
+	for _, e := range ev {
+		if e.Offset > after && e.Offset <= after+days && e.Paise < 0 && e.Kind != "sip" {
+			committed -= e.Paise
+		}
+	}
+	committed += st.Fixed * int64(m.Months)
+	return max(cash-committed-st.Buffer, 0) / int64(days), st.PaceDaily() * m.FloorPct / 100, committed
+}
+
+// Safe is the core number: what today can spend while cash keeps the mode's promise of months without a salary.
 type Safe struct {
 	TodayPaise     int64   `json:"todayPaise"`
 	SpentPaise     int64   `json:"spentPaise"`
@@ -284,28 +336,50 @@ type Safe struct {
 	Ratio          float64 `json:"ratio"`
 	Tone           string  `json:"tone"` // good under 70%, warn to 100%, bad over
 	CashPaise      int64   `json:"cashPaise"`
-	CommittedPaise int64   `json:"committedPaise"`
+	CommittedPaise int64   `json:"committedPaise"` // everything due over the mode's months, fixed costs included
 	BufferPaise    int64   `json:"bufferPaise"`
-	DaysToSalary   int     `json:"daysToSalary"`
-	SalarySet      bool    `json:"salarySet"`
-	Committed      []Event `json:"committed"`
+	Committed      []Event `json:"committed"`  // grouped by name, with a count
+	FixedPaise     int64   `json:"fixedPaise"` // the fixed-cost part of CommittedPaise
+	Mode           Mode    `json:"mode"`
+	Modes          []Mode  `json:"modes"`
+	GoalPaise      int64   `json:"goalPaise"`   // the daily figure that really reaches the goal
+	OnFloor        bool    `json:"onFloor"`     // the goal is out of reach, so today is the mode's minimum
+	ShortPaise     int64   `json:"shortPaise"`  // the cash missing to reach the goal at the mode's minimum
+	SustainDays    float64 `json:"sustainDays"` // how long cash lasts at this budget with no salary
 }
 
-// SafeNow divides what is free by the days to salary. Today's bank spending is added back so spending does not shrink today's own allowance;
+// SafeNow divides what is free by the mode's days. Today's bank spending is added back so spending does not shrink today's own allowance;
 // tomorrow's figure takes all of it off, which is what carries an under- or overspend forward.
 func (st *State) SafeNow() Safe {
-	d := st.DaysToSalary()
-	s := Safe{SpentPaise: st.TodaySpent, CashPaise: st.Cash, BufferPaise: st.Buffer, DaysToSalary: d, SalarySet: st.Salary > 0 && st.SalaryDay > 0, Committed: []Event{}}
-	for _, e := range st.Events(d) {
-		if e.Paise < 0 {
-			s.CommittedPaise -= e.Paise
-			s.Committed = append(s.Committed, e)
+	m := st.mode()
+	days := m.Months * 30
+	ev := st.Events(days)
+	start := st.Cash + (st.TodaySpent - st.TodayCard)
+	goal, floor, committed := st.budget(start, -1, ev)
+	s := Safe{SpentPaise: st.TodaySpent, CashPaise: st.Cash, BufferPaise: st.Buffer, CommittedPaise: committed, FixedPaise: st.Fixed * int64(m.Months), Mode: m, Modes: Modes, GoalPaise: goal, Committed: []Event{}, TodayPaise: max(goal, floor), OnFloor: floor > goal}
+	at := map[string]int{}
+	for _, e := range ev {
+		if e.Paise >= 0 || e.Kind == "sip" {
+			continue
 		}
+		if i, ok := at[e.Name]; ok {
+			s.Committed[i].Paise += e.Paise
+			s.Committed[i].Count++
+			continue
+		}
+		e.Count = 1
+		at[e.Name] = len(s.Committed)
+		s.Committed = append(s.Committed, e)
 	}
-	free := st.Cash + (st.TodaySpent - st.TodayCard) - s.CommittedPaise - st.Buffer
-	s.TodayPaise = max(free, 0) / int64(d)
+	if s.OnFloor {
+		s.ShortPaise = floor*int64(days) + committed + st.Buffer - start
+	}
+	if perDay := float64(s.TodayPaise) + float64(committed)/float64(days); perDay > 0 {
+		s.SustainDays = math.Max(float64(start-st.Buffer), 0) / perDay
+	}
 	s.LeftPaise = s.TodayPaise - st.TodaySpent
-	s.TomorrowPaise = max(free-st.TodaySpent, 0) / int64(max(d-1, 1))
+	nextGoal := max(start-st.TodaySpent-committed-st.Buffer, 0) / int64(max(days-1, 1))
+	s.TomorrowPaise = max(nextGoal, floor)
 	if s.TodayPaise > 0 {
 		s.Ratio = float64(st.TodaySpent) / float64(s.TodayPaise)
 	} else if st.TodaySpent > 0 {
@@ -360,6 +434,7 @@ type Scenario struct {
 	SafePerDay    int64   `json:"safePerDayPaise"`
 	Uncovered     string  `json:"uncovered,omitempty"` // the first commitment the purchase leaves short
 	InterestPaise int64   `json:"interestPaise"`       // a month's interest if on a card and the bill cannot be paid in full
+	ShortPaise    int64   `json:"shortPaise"`          // how far the purchase leaves the mode's goal out of reach
 	Passes        bool    `json:"passes"`
 }
 
@@ -380,15 +455,14 @@ func (st *State) evaluate(ev []Event, b []int64, k int, in CheckInput) Scenario 
 	}
 	n := min(st.nextSalary(k), horizon)
 	s := Scenario{Date: st.date(k).Format("2006-01-02"), RunwayAfter: st.RunwayDays(b[k] - in.AmountPaise), Passes: true}
-	var committed int64
-	for _, e := range ev {
-		if e.Offset > k && e.Offset <= n && e.Paise < 0 {
-			committed -= e.Paise
-		}
-	}
-	s.SafePerDay = max(bought(k)-committed-st.Buffer, 0) / int64(max(n-k, 1))
-	if s.SafePerDay < safeFloor {
+	// A card purchase is still money owed, so the goal is measured with it taken off whenever it gets paid.
+	goal, floor, committed := st.budget(b[k]-in.AmountPaise, k, ev)
+	before, _, _ := st.budget(b[k], k, ev)
+	s.SafePerDay = max(goal, floor)
+	// Spending that fits a day's budget is what the budget is for; anything larger must leave the goal within reach.
+	if goal < floor && in.AmountPaise > max(before, floor) {
 		s.Passes = false
+		s.ShortPaise = floor*int64(st.mode().Months*30) + committed + st.Buffer - (b[k] - in.AmountPaise)
 	}
 	for off := k; off < n; off++ {
 		if bal := bought(off); bal < st.Buffer {
@@ -502,8 +576,9 @@ func (st *State) Check(in CheckInput) CheckResult {
 	if now.Uncovered != "" {
 		r.Reasons = append(r.Reasons, "Buying today leaves "+now.Uncovered+" short before your next salary.")
 	}
-	if now.SafePerDay < safeFloor {
-		r.Reasons = append(r.Reasons, fmt.Sprintf("Safe to spend would be %s a day; the floor is %s.", Rs(now.SafePerDay), Rs(safeFloor)))
+	if now.ShortPaise > 0 {
+		m := st.mode()
+		r.Reasons = append(r.Reasons, fmt.Sprintf("%s mode aims for %s without salary. Today this purchase leaves that %s short.", m.Label, plural(m.Months, "month"), Rs(now.ShortPaise)))
 	}
 	if st.Buffer > 0 && st.Cash-in.AmountPaise < st.Buffer {
 		r.Reasons = append(r.Reasons, "Cash would fall below your "+Rs(st.Buffer)+" buffer.")
@@ -886,7 +961,7 @@ type Confidence struct {
 func (st *State) Confidence() Confidence {
 	c := Confidence{AccountsSeen: st.AccountsMoved, AccountsTotal: st.AccountsTotal, Notes: []string{}}
 	if !st.salarySet() {
-		c.Notes = append(c.Notes, "No salary date set: planning 30 days ahead.")
+		c.Notes = append(c.Notes, "No salary date set, so future income is not counted.")
 	}
 	if len(st.Days) < 14 {
 		c.Notes = append(c.Notes, "Under two weeks of history, so your usual pace is a rough guess.")

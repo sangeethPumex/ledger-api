@@ -2,6 +2,7 @@ package copilot
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/url"
 	"strings"
@@ -90,7 +91,7 @@ func (in *WantInput) Parse() (Want, string) {
 }
 
 type Service struct {
-	nudges, mutes, wants, txs *mongo.Collection
+	nudges, mutes, wants, settings, txs *mongo.Collection
 
 	accounts *accounts.Service
 	cards    *cards.Service
@@ -115,7 +116,7 @@ type Service struct {
 }
 
 func NewService(ctx context.Context, db *mongo.Database, a *accounts.Service, c *cards.Service, p *profile.Service, e *emis.Service, f *funds.Service, m *mandates.Service, b *budgets.Service, cat *categories.Service, in *insights.Service, sn *snapshots.Service, push *brainjogger.Service) (*Service, error) {
-	s := &Service{nudges: db.Collection("nudges"), mutes: db.Collection("nudge_mutes"), wants: db.Collection("wants"), txs: db.Collection("transactions"),
+	s := &Service{nudges: db.Collection("nudges"), mutes: db.Collection("nudge_mutes"), wants: db.Collection("wants"), settings: db.Collection("copilot_settings"), txs: db.Collection("transactions"),
 		accounts: a, cards: c, profile: p, emis: e, funds: f, mandates: m, budgets: b, cats: cat, insights: in, snaps: sn, push: push, poke: make(chan struct{}, 1)}
 	// Old nudges expire on their own, so the collection stays small however long the app runs.
 	_, err := s.nudges.Indexes().CreateMany(ctx, []mongo.IndexModel{
@@ -123,6 +124,13 @@ func NewService(ctx context.Context, db *mongo.Database, a *accounts.Service, c 
 		{Keys: bson.D{{Key: "state", Value: 1}, {Key: "created_at", Value: -1}}},
 	})
 	return s, err
+}
+
+// SetMode changes how hard the money has to last, for every number the app shows.
+func (s *Service) SetMode(ctx context.Context, key string) error {
+	_, err := s.settings.UpdateByID(ctx, "mode", bson.M{"$set": bson.M{"key": key}}, options.UpdateOne().SetUpsert(true))
+	s.Invalidate()
+	return err
 }
 
 // Poke says a transaction just landed: the cached numbers are stale and the rules should run. Non-blocking.
@@ -204,6 +212,20 @@ func (s *Service) gather(ctx context.Context, now time.Time) (*State, error) {
 	g.Go(func() error { return s.todaySpend(c, today, st) })
 	g.Go(func() (err error) { st.Owed, err = s.owed(c); return })
 	g.Go(func() (err error) { st.Vendors, err = s.vendorWeeks(c, today); return })
+	g.Go(func() error {
+		var d struct {
+			Key string `bson:"key"`
+		}
+		st.Mode = DefaultMode
+		if err := s.settings.FindOne(c, bson.M{"_id": "mode"}).Decode(&d); err != nil {
+			if errors.Is(err, mongo.ErrNoDocuments) {
+				return nil
+			}
+			return err
+		}
+		st.Mode = d.Key
+		return nil
+	})
 	g.Go(func() error {
 		cur, err := s.wants.Find(c, bson.D{}, options.Find().SetSort(bson.D{{Key: "created_at", Value: -1}}).SetLimit(maxWants))
 		if err != nil {

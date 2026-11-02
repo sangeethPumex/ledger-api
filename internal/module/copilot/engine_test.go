@@ -34,32 +34,72 @@ func TestRs(t *testing.T) {
 	}
 }
 
-func TestSafeSubtractsCommitmentsAndBuffer(t *testing.T) {
+func TestSafeSpreadsCashOverTheModesMonths(t *testing.T) {
 	st := base()
-	st.Mandates = []mandates.Occ{{Name: "Rent", Paise: rupee(20_000), Days: 3}, {Name: "After salary", Paise: rupee(99_000), Days: 40}}
+	st.Cash, st.Fixed = rupee(500_000), rupee(10_000)
+	st.Mandates = []mandates.Occ{{Name: "Rent", Paise: rupee(20_000), Days: 3}, {Name: "Beyond the goal", Paise: rupee(99_000), Days: 200}}
 	st.Emis = []Dated{{"Car", 5, rupee(5_000)}}
+	st.Sips = []Dated{{"Index", 7, rupee(9_000)}}
 	s := st.SafeNow()
-	// (50,000 - 20,000 rent - 5,000 EMI - 10,000 buffer) / 10 days; what falls after salary is not counted.
-	if s.TodayPaise != rupee(1_500) || s.CommittedPaise != rupee(25_000) || s.DaysToSalary != 10 {
+	// Normal is 3 months: (5,00,000 - rent 20,000 - 3 EMIs 15,000 - 3 months fixed 30,000 - buffer 10,000) / 90. SIPs pause without a salary.
+	if s.CommittedPaise != rupee(65_000) || s.TodayPaise != rupee(425_000)/90 || s.OnFloor {
 		t.Fatalf("safe = %+v", s)
+	}
+	if len(s.Committed) != 2 || s.Committed[0].Name != "Car" || s.Committed[0].Count != 3 || s.Committed[0].Paise != -rupee(15_000) {
+		t.Fatalf("committed should be grouped: %+v", s.Committed)
+	}
+}
+
+func TestModesTradeBudgetForMonths(t *testing.T) {
+	var last int64
+	for _, key := range []string{"ultra_poor", "saving", "normal", "luxury"} {
+		st := base()
+		st.Cash, st.Mode = rupee(2_000_000), key
+		s := st.SafeNow()
+		if s.Mode.Key != key || s.TodayPaise <= last {
+			t.Fatalf("%s: %d after %d", key, s.TodayPaise, last)
+		}
+		last = s.TodayPaise
+	}
+	if st := base(); st.SafeNow().Mode.Key != DefaultMode {
+		t.Fatal("no mode saved should mean normal")
+	}
+}
+
+func TestSafeFloorWhenTheGoalIsOutOfReach(t *testing.T) {
+	s := base().SafeNow()
+	// (50,000 - 10,000 buffer) / 90 is about ₹444, under 80% of a usual ₹1,000 day. Reaching the goal needs 72,000 + 10,000 of cash.
+	if !s.OnFloor || s.TodayPaise != rupee(800) || s.ShortPaise != rupee(32_000) {
+		t.Fatalf("safe = %+v", s)
+	}
+	if s.SustainDays != float64(rupee(40_000))/float64(rupee(800)) {
+		t.Fatalf("sustain = %f", s.SustainDays)
+	}
+	st := base()
+	st.Mode = "ultra_poor"
+	if s := st.SafeNow(); s.TodayPaise != rupee(300) {
+		t.Fatalf("ultra poor floor = %d", s.TodayPaise)
 	}
 }
 
 func TestSafeCarriesOverAndKeepsTodaysAllowance(t *testing.T) {
 	st := base()
+	st.Cash, st.Buffer = rupee(500_000), 0
+	want := rupee(500_000) / 90
 	st.Cash -= rupee(1_000) // bank spending has already left cash
 	st.TodaySpent = rupee(1_000)
 	s := st.SafeNow()
-	if s.TodayPaise != rupee(4_000) {
+	if s.TodayPaise != want {
 		t.Fatalf("today's allowance moved with today's spending: %d", s.TodayPaise)
 	}
-	if s.TomorrowPaise != rupee(39_000)/9 {
+	if s.TomorrowPaise != rupee(499_000)/89 {
 		t.Fatalf("tomorrow = %d", s.TomorrowPaise)
 	}
 	// A card purchase has not left cash, but it still comes off tomorrow.
 	st = base()
+	st.Cash, st.Buffer = rupee(500_000), 0
 	st.TodaySpent, st.TodayCard = rupee(1_000), rupee(1_000)
-	if s := st.SafeNow(); s.TodayPaise != rupee(4_000) || s.TomorrowPaise != rupee(39_000)/9 {
+	if s := st.SafeNow(); s.TodayPaise != want || s.TomorrowPaise != rupee(499_000)/89 {
 		t.Fatalf("card spend: %+v", s)
 	}
 }
@@ -68,7 +108,7 @@ func TestSafeTones(t *testing.T) {
 	for _, c := range []struct {
 		spent int64
 		tone  string
-	}{{rupee(2_000), "good"}, {rupee(3_000), "warn"}, {rupee(4_000), "warn"}, {rupee(4_001), "bad"}} {
+	}{{rupee(400), "good"}, {rupee(600), "warn"}, {rupee(800), "warn"}, {rupee(801), "bad"}} {
 		st := base()
 		st.TodaySpent, st.TodayCard = c.spent, c.spent
 		if s := st.SafeNow(); s.Tone != c.tone {
@@ -88,7 +128,7 @@ func TestPaceIgnoresBigDays(t *testing.T) {
 
 func TestCheckVerdicts(t *testing.T) {
 	st := base()
-	if c := st.Check(CheckInput{AmountPaise: rupee(5_000)}); c.Verdict != "buy" || c.Earliest != "" {
+	if c := st.Check(CheckInput{AmountPaise: rupee(500)}); c.Verdict != "buy" || c.Earliest != "" {
 		t.Errorf("small purchase: %s (%v)", c.Verdict, c.Reasons)
 	}
 	// Too much for now, easy after salary lands.
@@ -143,10 +183,29 @@ func TestOnCardDelaysThePayment(t *testing.T) {
 	st := base()
 	tb, td, avail := 5, 20, rupee(100_000)
 	st.Cards = []cards.View{{Card: cards.Card{Name: "A", BillingDay: 7, DueDay: 22}, DaysToBilling: &tb, DaysToDue: &td, AvailablePaise: &avail}}
-	cash := st.Check(CheckInput{AmountPaise: rupee(38_000)})
-	card := st.Check(CheckInput{AmountPaise: rupee(38_000), OnCard: true})
-	if cash.Verdict == "buy" || card.Verdict != "buy" {
-		t.Fatalf("cash %s card %s", cash.Verdict, card.Verdict)
+	cash := st.Check(CheckInput{AmountPaise: rupee(60_000)})
+	card := st.Check(CheckInput{AmountPaise: rupee(60_000), OnCard: true})
+	if cash.Scenarios[0].Uncovered == "" || card.Scenarios[0].Uncovered != "" {
+		t.Fatalf("cash %+v card %+v", cash.Scenarios[0], card.Scenarios[0])
+	}
+}
+
+func TestSmallPurchaseFitsTheBudgetEvenBelowTheGoal(t *testing.T) {
+	st := base()
+	if c := st.Check(CheckInput{AmountPaise: rupee(500)}); c.Verdict != "buy" {
+		t.Fatalf("within a day's budget: %s %v", c.Verdict, c.Reasons)
+	}
+	if c := st.Check(CheckInput{AmountPaise: rupee(5_000)}); c.Verdict == "buy" || c.Scenarios[0].ShortPaise == 0 {
+		t.Fatalf("beyond it, with the goal out of reach: %s", c.Verdict)
+	}
+}
+
+func TestStricterModeWaitsLonger(t *testing.T) {
+	loose, strict := base(), base()
+	loose.Mode, strict.Mode = "luxury", "ultra_poor"
+	in := CheckInput{AmountPaise: rupee(30_000)}
+	if a, b := loose.Check(in), strict.Check(in); a.Verdict == "skip" || (b.Verdict != "skip" && b.Earliest <= a.Earliest) {
+		t.Fatalf("luxury %s %s, ultra poor %s %s", a.Verdict, a.Earliest, b.Verdict, b.Earliest)
 	}
 }
 

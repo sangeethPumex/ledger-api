@@ -34,7 +34,7 @@ var aiTools = []nim.Tool{
 			"limit": map[string]any{"type": "integer", "description": "latest transactions to list, 1-20, default 10"}}, "vendor"),
 	tool("compare_months", "Per-category spending in two months side by side, with totals and the change.",
 		map[string]any{"month_a": strProp("YYYY-MM"), "month_b": strProp("YYYY-MM")}, "month_a", "month_b"),
-	tool("safe_to_spend", "What is safe to spend today, with the commitments and buffer behind it. Use for any question about today's budget.", map[string]any{}),
+	tool("safe_to_spend", "What is safe to spend today under the user's mode (ultra poor, saving, normal or luxury: how many months cash must last with no salary), with the commitments and buffer behind it. Use for any question about today's budget.", map[string]any{}),
 	tool("purchase_check", "The verdict on a purchase (buy, wait or skip), its cost in runway days, and the reasons. Use for any \"can I afford this?\".",
 		map[string]any{"amount": map[string]any{"type": "number", "description": "rupees"}, "date": strProp("YYYY-MM-DD, optional: buy on this day instead of today")}, "amount"),
 	tool("delay_scenarios", "A purchase now, in 2 weeks, in a month and after salary, side by side.",
