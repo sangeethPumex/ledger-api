@@ -76,3 +76,12 @@ func RegisterRoutes(mux *http.ServeMux, c *Controller, auth func(http.Handler) h
 	mux.Handle("GET /insights", auth(http.HandlerFunc(c.Overview)))
 	mux.Handle("GET /insights/patterns", auth(http.HandlerFunc(c.Patterns)))
 }
+
+// Recurring is the vendor scan alone: the recurring half of Overview, for the copilot.
+func (s *Service) Recurring(ctx context.Context, now time.Time) ([]Recurring, error) {
+	all, err := s.series(ctx, now)
+	if err != nil {
+		return nil, err
+	}
+	return detectRecurring(all, now), nil
+}

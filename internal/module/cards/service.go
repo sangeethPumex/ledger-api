@@ -140,6 +140,7 @@ func (s *Service) Update(ctx context.Context, id bson.ObjectID, p Patch) error {
 	}
 	if p.OutstandingPaise != nil {
 		put("outstanding_paise", *p.OutstandingPaise, *p.OutstandingPaise < 0)
+		put("outstanding_at", time.Now().UTC(), *p.OutstandingPaise < 0)
 	}
 	if p.SharedWith != nil {
 		if *p.SharedWith == "" {
@@ -384,6 +385,52 @@ func (s *Service) lastPayments(ctx context.Context) (map[bson.ObjectID]lastPayme
 	return out, nil
 }
 
+// sinceOutstanding is, per card with an entered outstanding, the net of spends (and cash withdrawals) less refunds and bill payments
+// dated after the outstanding was entered. Positive means more is owed.
+func (s *Service) sinceOutstanding(ctx context.Context, cards []Card) (map[bson.ObjectID]int64, error) {
+	out := map[bson.ObjectID]int64{}
+	var scope bson.A
+	for _, c := range cards {
+		if c.OutstandingPaise == nil || c.OutstandingAt == nil {
+			continue
+		}
+		after := bson.M{"$gte": *c.OutstandingAt}
+		scope = append(scope,
+			bson.M{"card_id": c.ID, "occurred_at": after, "type": bson.M{"$in": bson.A{"expense", "atm", "refund", "card_bill_payment"}}},
+			bson.M{"paid_card_id": c.ID, "occurred_at": after})
+	}
+	if len(scope) == 0 {
+		return out, nil
+	}
+	cur, err := s.txs.Aggregate(ctx, mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{"$or": scope}}},
+		{{Key: "$group", Value: bson.M{
+			"_id":   bson.M{"card": bson.M{"$ifNull": bson.A{"$paid_card_id", "$card_id"}}, "type": "$type"},
+			"paise": bson.M{"$sum": "$amount_paise"},
+		}}},
+	})
+	if err != nil {
+		return nil, err
+	}
+	var rows []struct {
+		ID struct {
+			Card bson.ObjectID `bson:"card"`
+			Type string        `bson:"type"`
+		} `bson:"_id"`
+		Paise int64 `bson:"paise"`
+	}
+	if err := cur.All(ctx, &rows); err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		if r.ID.Type == "refund" || r.ID.Type == "card_bill_payment" {
+			r.Paise = -r.Paise
+		}
+		out[r.ID.Card] += r.Paise
+	}
+	return out, nil
+}
+
 // Views lists every card with its cycle spend, limit use, statement and linked loans: three queries however many cards there are.
 func (s *Service) Views(ctx context.Context, now time.Time) ([]View, error) {
 	cards, err := s.List(ctx)
@@ -418,8 +465,16 @@ func (s *Service) Views(ctx context.Context, now time.Time) ([]View, error) {
 		return nil, err
 	}
 	out := make([]View, len(cards))
+	since, err := s.sinceOutstanding(ctx, cards)
+	if err != nil {
+		return nil, err
+	}
 	for i, c := range cards {
 		t := tot[c.ID]
+		if c.OutstandingPaise != nil && c.OutstandingAt != nil {
+			adj := max(*c.OutstandingPaise+since[c.ID], 0)
+			c.OutstandingPaise = &adj // the lender's figure plus what happened after it was entered
+		}
 		out[i] = Compute(c, t.spent, t.n, byCard[c.ID], now)
 		out[i].Statement = BuildStatement(c, t.billed, t.paid, now)
 		out[i].AddUnpaidStatement()

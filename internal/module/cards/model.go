@@ -36,6 +36,9 @@ type Card struct {
 	// OutstandingPaise is what the lender's app says is owed. When set it replaces the figure worked out from transactions,
 	// which is the only way to track a line whose SMS carry no card number.
 	OutstandingPaise *int64 `bson:"outstanding_paise,omitempty" json:"outstanding_paise,omitempty"`
+	// OutstandingAt is when that figure was entered. Spends and bill payments dated after it are added to it; without it (entered
+	// before this field existed) the figure stays fixed until it is entered again.
+	OutstandingAt *time.Time `bson:"outstanding_at,omitempty" json:"outstanding_at,omitempty"`
 	// SharedWith names the card that owns the limit this one draws from (two cards from one bank often share a limit).
 	// A card that shares has no limit of its own, and the owner cannot itself share: no chains.
 	SharedWith *bson.ObjectID `bson:"shared_with,omitempty" json:"shared_with,omitempty"`

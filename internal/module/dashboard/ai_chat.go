@@ -79,7 +79,7 @@ type chatDoc struct {
 
 // appLinks are the pages an answer may point to. Anything else the model invents is dropped.
 var appLinks = map[string]bool{
-	"/": true, "/insights": true, "/accounts": true, "/transactions": true, "/budgets": true, "/cards": true, "/mandates": true,
+	"/": true, "/copilot": true, "/insights": true, "/accounts": true, "/transactions": true, "/budgets": true, "/cards": true, "/mandates": true,
 	"/emis": true, "/owed": true, "/funds": true, "/stocks": true, "/categories": true, "/vendors": true, "/profile": true,
 }
 
@@ -187,8 +187,8 @@ const chatSystem = `You are a calm, practical personal-finance expert for one pe
 
 DATA
 - Use the figures in <data> and the tools. Call a tool for any month, vendor or period not in <data>. Never guess or invent a figure; if a tool returns nothing or an error, say exactly that.
-- Take a figure only from the <data> field or tool result it belongs to. Never reuse one figure under another label (cash is not dailyBudget; income is not expenses).
-- For "can I afford this?", subtract mandatesDueNext90Days from cash first.
+- Take a figure only from the <data> field or tool result it belongs to. Never reuse one figure under another label (cash is not safe to spend; income is not expenses).
+- For "can I afford this?", what if I wait, what is safe to spend today, or what is coming up, call purchase_check, delay_scenarios, safe_to_spend or upcoming_money. Never work these out yourself: report the verdict the tool gives and explain it. To explore a what-if, call the tool again with the changed amount or date.
 - Call remember only when the user states a lasting goal or preference (for example "I want to save ₹5 lakh by December"), never for ordinary questions.
 
 OUTPUT: your final message is ONE JSON object and nothing else: no prose, no code fences, no comments, no trailing commas. Double quotes only. Every [ and { must be closed. Keys in this order:
@@ -197,7 +197,7 @@ OUTPUT: your final message is ONE JSON object and nothing else: no prose, no cod
 - metrics: 2 to 6 KPI cards. Money goes in "rupees" (whole rupees, a number, no ₹ or commas). Anything else (days, percent) uses "text":string instead of "rupees". source: "recorded" = transactions or tool results; "estimated" = averages, projections, runway, market values; "told" = <notes> or <memory>. note: at most 10 words.
 - chart: include it only when a picture helps, otherwise leave the key out. Use "bar" to compare things (months, categories, vendors) and "line" for change over time in order. 2 to 12 points, labels short ("Oct", "Rent"), values in whole rupees from your data or tool results.
 - insights: an array of 1 to 3 plain strings, each one sentence. The last is a concrete next step. Strings only: never put objects, keys or links inside insights.
-- links: up to 3 pages, href only from: / /insights /accounts /transactions /budgets /cards /mandates /emis /owed /funds /stocks /categories /vendors /profile.
+- links: up to 3 pages, href only from: / /copilot /insights /accounts /transactions /budgets /cards /mandates /emis /owed /funds /stocks /categories /vendors /profile.
 
 EXAMPLE of a valid reply:
 {"conclusion":"You spent ₹40,000 less in November than October, but November has only just started.","metrics":[{"label":"October spend","rupees":130694,"source":"recorded","note":"full month"},{"label":"November spend","rupees":870,"source":"recorded","note":"so far"}],"chart":{"kind":"bar","title":"Spend by month","points":[{"label":"Oct","rupees":130694},{"label":"Nov","rupees":870}]},"insights":["Compare again after mid-month for a fair picture."],"links":[{"label":"Transactions","href":"/transactions"}]}

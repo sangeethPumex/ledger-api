@@ -10,6 +10,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
+	"ledger-backend/internal/module/copilot"
 	"ledger-backend/internal/ist"
 	"ledger-backend/internal/module/snapshots"
 )
@@ -172,3 +173,5 @@ func (s *Service) NetWorth(ctx context.Context, months int, now time.Time) (*Net
 	now0 := newPoint(t.Format("2006-01-02"), d.Position.Cash, d.Position.Current, d.Position.Liabilities)
 	return &NetWorthResponse{History: hist, Scenarios: project(now0, d.Upcoming, now, 3), Method: projectionMethod}, nil
 }
+
+func (s *Service) UseCopilot(c *copilot.Service) { s.copilot = c }

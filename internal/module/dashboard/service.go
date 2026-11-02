@@ -15,6 +15,7 @@ import (
 	"ledger-backend/internal/spend"
 	"ledger-backend/internal/module/accounts"
 	"ledger-backend/internal/module/cards"
+	"ledger-backend/internal/module/copilot"
 	"ledger-backend/internal/module/emis"
 	"ledger-backend/internal/module/funds"
 	"ledger-backend/internal/module/mandates"
@@ -43,6 +44,7 @@ type Service struct {
 	mandates *mandates.Service
 	llm      Chatter
 	snaps    *snapshots.Service // daily rows; nil in tests
+	copilot  *copilot.Service  // deterministic safe-to-spend and purchase answers; nil in tests
 	chats    *mongo.Collection // saved AI conversations, owned here
 
 	sumMu sync.Mutex

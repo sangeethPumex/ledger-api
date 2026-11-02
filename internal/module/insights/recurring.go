@@ -30,6 +30,7 @@ type Recurring struct {
 	CategoryID   *bson.ObjectID `json:"category_id,omitempty"`
 	Cadence      string         `json:"cadence"`
 	AmountPaise  int64          `json:"amount_paise"`  // the usual charge
+	LastPaise    int64          `json:"last_paise"`    // the latest charge
 	MonthlyPaise int64          `json:"monthly_paise"` // the usual charge spread over a month
 	Count        int            `json:"count"`
 	LastAt       time.Time      `json:"last_at"`
@@ -95,7 +96,7 @@ func detectRecurring(all []vendorSeries, now time.Time) []Recurring {
 				status = "lapsed"
 			}
 			out = append(out, Recurring{
-				Name: s.Name, VendorID: s.VendorID, CategoryID: s.CategoryID, Cadence: c.name, AmountPaise: usual,
+				Name: s.Name, VendorID: s.VendorID, CategoryID: s.CategoryID, Cadence: c.name, AmountPaise: usual, LastPaise: amts[n-1],
 				MonthlyPaise: int64(math.Round(float64(usual) * c.perMo)), Count: n, LastAt: last, NextAt: next,
 				DaysUntil: int(math.Round(next.Sub(now).Hours() / 24)), Status: status,
 			})

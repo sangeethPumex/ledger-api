@@ -18,6 +18,7 @@ import (
 	"ledger-backend/internal/module/cards"
 	"ledger-backend/internal/module/budgets"
 	"ledger-backend/internal/module/categories"
+	"ledger-backend/internal/module/copilot"
 	"ledger-backend/internal/module/dashboard"
 	"ledger-backend/internal/module/emis"
 	"ledger-backend/internal/module/funds"
@@ -103,6 +104,12 @@ func main() {
 	snapSvc, err := snapshots.NewService(ctx, db, accSvc, cardSvc, emiSvc, fundSvc, stockSvc, profSvc)
 	check(err)
 	dashSvc.UseSnapshots(snapSvc)
+	insSvc := insights.NewService(db)
+	copSvc, err := copilot.NewService(ctx, db, accSvc, cardSvc, profSvc, emiSvc, fundSvc, mandSvc, budSvc, catSvc, insSvc, snapSvc, jogSvc)
+	check(err)
+	dashSvc.UseCopilot(copSvc)
+	// Rules run every 15 minutes and whenever a parsed message lands.
+	go copSvc.Run(context.Background(), 15*time.Minute)
 	// One row per day (balances, holdings, net worth, spending): fills the past from the transactions, then keeps today's row live.
 	go snapSvc.Run(context.Background(), 15*time.Minute)
 
@@ -126,6 +133,7 @@ func main() {
 		for range trigger {
 			pctx, pcancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			txSvc.ParsePending(pctx)
+			copSvc.Poke()
 			pcancel()
 		}
 	}()
@@ -146,7 +154,8 @@ func main() {
 	dashboard.RegisterRoutes(mux, dashboard.NewController(dashSvc), auth)
 	brainjogger.RegisterRoutes(mux, brainjogger.NewController(jogSvc), auth)
 	budgets.RegisterRoutes(mux, budgets.NewController(budSvc), auth)
-	insights.RegisterRoutes(mux, insights.NewController(insights.NewService(db)), auth)
+	insights.RegisterRoutes(mux, insights.NewController(insSvc), auth)
+	copilot.RegisterRoutes(mux, copilot.NewController(copSvc), auth)
 	views.RegisterRoutes(mux, views.NewController(viewSvc), auth)
 	snapshots.RegisterRoutes(mux, snapshots.NewController(snapSvc), auth)
 	purge.RegisterRoutes(mux, purge.NewController(purge.NewService(db, accSvc)), auth)

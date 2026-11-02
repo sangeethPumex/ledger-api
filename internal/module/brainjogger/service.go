@@ -218,3 +218,8 @@ func (s *Service) Run(ctx context.Context, every time.Duration) {
 		}
 	}
 }
+
+// Push sends one notification to every subscribed device, for other modules; it returns how many were reached.
+func (s *Service) Push(ctx context.Context, title, body, tag, url string) int {
+	return s.Notify(ctx, payload{Title: title, Body: body, Tag: tag, URL: url})
+}

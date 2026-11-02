@@ -124,7 +124,7 @@ func advicePrompt(d *Response, p *profile.Profile) string {
 		"income": rupees(d.Cashflow.Income), "expenses": rupees(d.Cashflow.Spent), "investedOrSaved": rupees(d.Cashflow.Invested), "netCash": rupees(d.Cashflow.Net),
 		"savingsRate": d.Cashflow.SavingsRate, "topDestinations": top,
 		"daysToSalary": u.DaysToSalary, "salary": rupees(u.SalaryPaise), "monthlyEmis": rupees(u.EmiMonthly), "emiOutstanding": rupees(u.EmiOutstanding),
-		"monthlySips": rupees(u.SipMonthly), "avgDailySpend": rupees(u.AvgDailySpend), "todaySpent": rupees(u.TodaySpent), "dailyBudget": rupees(u.DailyTarget),
+		"monthlySips": rupees(u.SipMonthly), "avgDailySpend": rupees(u.AvgDailySpend), "todaySpent": rupees(u.TodaySpent),
 		"owedToYouByOthers": rupees(d.OwedToYou), "runwayDays": u.RunwayDays, "bufferTarget": rupees(u.BufferTarget),
 	}
 	due := []map[string]any{}
