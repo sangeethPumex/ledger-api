@@ -23,3 +23,31 @@ func TestParseAnswerPlainText(t *testing.T) {
 		t.Fatal("empty reply must still produce a conclusion")
 	}
 }
+
+func TestParseAnswerSalvagesUnclosedArray(t *testing.T) {
+	a := parseAnswer(`{"conclusion":"Spend fell.","metrics":[{"label":"Cash","rupees":100,"source":"recorded"}],"insights":["Review mandates.","links":[{"label":"/transactions","href":"/transactions"}]"}`)
+	if a.Conclusion != "Spend fell." || len(a.Metrics) != 1 || len(a.Insights) != 0 {
+		t.Fatalf("salvage = %+v", a)
+	}
+}
+
+func TestChartIsCleaned(t *testing.T) {
+	ok := parseAnswer(`{"conclusion":"x","chart":{"kind":"bar","title":"t","points":[{"label":"Oct","rupees":5},{"label":"Nov","rupees":2},{"label":"","rupees":9}]}}`)
+	if ok.Chart == nil || len(ok.Chart.Points) != 2 {
+		t.Fatalf("chart = %+v", ok.Chart)
+	}
+	for _, bad := range []string{
+		`{"conclusion":"x","chart":{"kind":"pie","points":[{"label":"a","rupees":1},{"label":"b","rupees":2}]}}`,
+		`{"conclusion":"x","chart":{"kind":"bar","points":[{"label":"a","rupees":1}]}}`,
+	} {
+		if parseAnswer(bad).Chart != nil {
+			t.Fatalf("chart kept for %s", bad)
+		}
+	}
+}
+
+func TestValidJSON(t *testing.T) {
+	if !validJSON("```json\n{\"conclusion\":\"x\"}\n```") || validJSON(`{"insights":["a","links":[]"}`) || validJSON("words") {
+		t.Fatal("validJSON misjudged")
+	}
+}
