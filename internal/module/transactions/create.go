@@ -100,11 +100,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Transaction, err
 	if msg := in.Check(time.Now()); msg != "" {
 		return nil, ErrPatch(msg)
 	}
-	acc, err := oid(in.AccountID)
-	if err != nil {
-		return nil, err
-	}
-	card, err := oid(in.CardID)
+	acc, card, bank, last4, err := s.source(ctx, in.AccountID, in.CardID)
 	if err != nil {
 		return nil, err
 	}
@@ -122,36 +118,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Transaction, err
 		OccurredAt: in.OccurredAt.UTC(), ReceivedAt: in.OccurredAt.UTC(), Ref: in.Ref, RawVendor: in.Vendor, Note: in.Note,
 		OwedFrom: in.OwedFrom, OwedPaise: in.OwedPaise, Model: "manual", PromptVersion: "manual", CreatedAt: time.Now().UTC(),
 	}
-	if acc != nil {
-		accs, err := s.accounts.Raw(ctx)
-		if err != nil {
-			return nil, err
-		}
-		found := false
-		for _, a := range accs {
-			if a.ID == *acc {
-				t.AccountID, t.Bank, t.AccountLast4, found = acc, a.Bank, a.Last4, true
-			}
-		}
-		if !found {
-			return nil, ErrPatch("account not found")
-		}
-	}
-	if card != nil {
-		cs, err := s.cards.List(ctx)
-		if err != nil {
-			return nil, err
-		}
-		found := false
-		for _, c := range cs {
-			if c.ID == *card {
-				t.CardID, t.Bank, t.AccountLast4, found = card, c.Bank, c.Last4, true
-			}
-		}
-		if !found {
-			return nil, ErrPatch("card not found")
-		}
-	}
+	t.AccountID, t.CardID, t.Bank, t.AccountLast4 = acc, card, bank, last4
 	if paid != nil {
 		if ok, err := s.cards.Exists(ctx, *paid); err != nil {
 			return nil, err

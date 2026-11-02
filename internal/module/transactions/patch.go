@@ -17,6 +17,8 @@ type Patch struct {
 	RepaidPaise *int64     `json:"repaid_paise"`
 	// Splits replaces the split of this payment; an empty list removes it.
 	Splits *[]SplitPatch `json:"splits"`
+	// Edit corrects the amount, day, type, account and payee. It stands alone: send it without the fields above.
+	Edit *EditPatch `json:"edit"`
 }
 
 type SplitPatch struct {
@@ -141,6 +143,12 @@ func (s *Service) Delete(ctx context.Context, id bson.ObjectID) error {
 }
 
 func (s *Service) Patch(ctx context.Context, id bson.ObjectID, p Patch) error {
+	if p.Edit != nil {
+		if p.CategoryID != nil || p.PaidCardID != nil || p.Owed != nil || p.RepaidPaise != nil || p.Splits != nil {
+			return ErrPatch("edit the details on their own, apart from category, owed and split")
+		}
+		return s.edit(ctx, id, *p.Edit)
+	}
 	var cat, card *bson.ObjectID
 	var clearCard bool
 	if p.CategoryID != nil {
