@@ -14,6 +14,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"ledger-backend/internal/httpx"
+	"ledger-backend/internal/ist"
 	"ledger-backend/internal/module/profile"
 	"ledger-backend/internal/nim"
 )
@@ -286,7 +287,9 @@ func (c *Controller) Chat(w http.ResponseWriter, r *http.Request) {
 	for i, m := range recent {
 		hist[i] = nim.Message{Role: m.Role, Content: m.Content}
 	}
-	ans, err := c.svc.answer(ctx, chatSystem+"\n\n"+advicePrompt(resp, prof)+memoryBlock(prof), hist, now)
+	// Without today's date the model guesses the year for "last month" or "October" and the tools find nothing.
+	today := "Today is " + now.In(ist.Loc).Format("2006-01-02 (Monday)") + ". Month names without a year mean the most recent one that has started; tool months are YYYY-MM.\n\n"
+	ans, err := c.svc.answer(ctx, today+chatSystem+"\n\n"+advicePrompt(resp, prof)+memoryBlock(prof), hist, now)
 	if err != nil {
 		log.Printf("dashboard: chat: %v", err)
 		httpx.Err(w, 502, "the AI is unavailable right now")
