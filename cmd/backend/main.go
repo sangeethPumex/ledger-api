@@ -32,6 +32,7 @@ import (
 	"ledger-backend/internal/module/snapshots"
 	"ledger-backend/internal/module/stocks"
 	"ledger-backend/internal/module/transactions"
+	"ledger-backend/internal/module/vehicles"
 	"ledger-backend/internal/module/vendors"
 	"ledger-backend/internal/module/views"
 	"ledger-backend/internal/nim"
@@ -97,6 +98,12 @@ func main() {
 	mandSvc := mandates.NewService(db)
 	jogSvc := brainjogger.NewService(db)
 	go jogSvc.Run(context.Background(), 30*time.Second)
+	// Vehicle papers and photos; without S3_BUCKET the garage works but file uploads answer 503.
+	store, err := vehicles.NewStore(ctx, os.Getenv("S3_BUCKET"))
+	check(err)
+	vehSvc, err := vehicles.NewService(ctx, db, store, jogSvc)
+	check(err)
+	go vehSvc.Run(context.Background(), time.Hour)
 	budSvc, err := budgets.NewService(ctx, db)
 	check(err)
 	viewSvc, err := views.NewService(ctx, db)
@@ -160,6 +167,7 @@ func main() {
 	copilot.RegisterRoutes(mux, copilot.NewController(copSvc), auth)
 	views.RegisterRoutes(mux, views.NewController(viewSvc), auth)
 	snapshots.RegisterRoutes(mux, snapshots.NewController(snapSvc), auth)
+	vehicles.RegisterRoutes(mux, vehicles.NewController(vehSvc), auth)
 	purge.RegisterRoutes(mux, purge.NewController(purge.NewService(db, accSvc)), auth)
 
 	// Every endpoint lives under /finance/api, e.g. /finance/api/transactions.
