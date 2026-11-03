@@ -20,6 +20,7 @@ import (
 	"ledger-backend/internal/module/categories"
 	"ledger-backend/internal/module/copilot"
 	"ledger-backend/internal/module/dashboard"
+	"ledger-backend/internal/module/debts"
 	"ledger-backend/internal/module/emis"
 	"ledger-backend/internal/module/funds"
 	"ledger-backend/internal/module/insights"
@@ -141,6 +142,7 @@ func main() {
 	mux := http.NewServeMux()
 	categories.RegisterRoutes(mux, categories.NewController(catSvc), auth)
 	vendors.RegisterRoutes(mux, vendors.NewController(vendSvc), auth)
+	debts.RegisterRoutes(mux, debts.NewController(debts.NewService(db)), auth)
 	accounts.RegisterRoutes(mux, accounts.NewController(accSvc), auth)
 	cards.RegisterRoutes(mux, cards.NewController(cardSvc), auth)
 	transactions.RegisterRoutes(mux, transactions.NewController(txSvc), auth)

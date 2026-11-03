@@ -9,13 +9,37 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 type Client struct {
 	URL, Key, Model string
-	HTTP       *http.Client
+	HTTP            *http.Client
+	mu              sync.Mutex
+	next            time.Time // earliest start of the next Chat call
+}
+
+// minGap keeps Chat under NVIDIA's 40 requests/minute free quota.
+const minGap = 1600 * time.Millisecond
+
+// pace blocks until this call's slot; calls are spaced minGap apart.
+func (c *Client) pace(ctx context.Context) error {
+	c.mu.Lock()
+	at := c.next
+	if now := time.Now(); at.Before(now) {
+		at = now
+	}
+	c.next = at.Add(minGap)
+	c.mu.Unlock()
+	select {
+	case <-time.After(time.Until(at)):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func New(url, key, model string) *Client {
@@ -34,20 +58,39 @@ func (c *Client) Chat(ctx context.Context, system, user string) (string, error) 
 		"temperature": 0,
 		"stream":      false,
 	})
-	req, err := http.NewRequestWithContext(ctx, "POST", c.URL, bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.Key)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("nim status %d: %.200s", resp.StatusCode, raw)
+	var raw []byte
+	for attempt := 0; ; attempt++ {
+		if err := c.pace(ctx); err != nil {
+			return "", err
+		}
+		req, err := http.NewRequestWithContext(ctx, "POST", c.URL, bytes.NewReader(body))
+		if err != nil {
+			return "", err
+		}
+		req.Header.Set("Authorization", "Bearer "+c.Key)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := c.HTTP.Do(req)
+		if err != nil {
+			return "", err
+		}
+		raw, _ = io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode == 200 {
+			break
+		}
+		retry := resp.StatusCode == 429 || resp.StatusCode == 502 || resp.StatusCode == 503 || resp.StatusCode == 504
+		if !retry || attempt == 2 {
+			return "", fmt.Errorf("nim status %d: %.200s", resp.StatusCode, raw)
+		}
+		wait := time.Duration(attempt+1) * 5 * time.Second
+		if s, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && s > 0 && s <= 30 {
+			wait = time.Duration(s) * time.Second
+		}
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
 	}
 	var out struct {
 		Choices []struct {
