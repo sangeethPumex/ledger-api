@@ -15,6 +15,7 @@ import (
 	"time"
 )
 
+// NIM Faster Model
 type Client struct {
 	URL, Key, Model string
 	HTTP            *http.Client
