@@ -117,6 +117,12 @@ func (s *Service) Parse(ctx context.Context, rawID bson.ObjectID) error {
 			}
 		}
 	}
+	// A vendor filed under Self Transfer settles the type, whatever the model guessed.
+	for _, c := range cats {
+		if t.CategoryID != nil && c.ID == *t.CategoryID && c.Name == categories.SelfTransfer {
+			t.Type = "transfer"
+		}
+	}
 	if t.Type == "card_bill_payment" && t.Direction != "credit" && t.CategoryID == nil {
 		// Under "Credit card payments", the transaction row asks which card it paid; picking one links it to that card.
 		if id, err := s.categories.CardPaymentsID(ctx); err == nil {
