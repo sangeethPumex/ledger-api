@@ -394,10 +394,14 @@ func (s *Service) sinceOutstanding(ctx context.Context, cards []Card) (map[bson.
 		if c.OutstandingPaise == nil || c.OutstandingAt == nil {
 			continue
 		}
-		after := bson.M{"$gte": *c.OutstandingAt}
+		// SMS dates often have no time (midnight), so judge "after" by when the message arrived, falling back to occurred_at.
+		after := bson.A{
+			bson.M{"received_at": bson.M{"$gte": *c.OutstandingAt}},
+			bson.M{"received_at": bson.M{"$exists": false}, "occurred_at": bson.M{"$gte": *c.OutstandingAt}},
+		}
 		scope = append(scope,
-			bson.M{"card_id": c.ID, "occurred_at": after, "type": bson.M{"$in": bson.A{"expense", "atm", "refund", "card_bill_payment"}}},
-			bson.M{"paid_card_id": c.ID, "occurred_at": after})
+			bson.M{"card_id": c.ID, "$or": after, "type": bson.M{"$in": bson.A{"expense", "atm", "refund", "card_bill_payment"}}},
+			bson.M{"paid_card_id": c.ID, "$or": after})
 	}
 	if len(scope) == 0 {
 		return out, nil

@@ -36,14 +36,15 @@ type bucketDoc struct {
 func (s *Service) patterns(ctx context.Context, now time.Time) (*Patterns, error) {
 	end := ist.Midnight(now).AddDate(0, 0, 1)
 	start := end.AddDate(0, 0, -patternWeeks*7)
-	by := func(op string) bson.A {
+	by := func(op string, field any) bson.A {
 		return bson.A{bson.M{"$group": bson.M{
-			"_id":   bson.M{op: bson.M{"date": "$occurred_at", "timezone": "Asia/Kolkata"}},
+			"_id":   bson.M{op: bson.M{"date": field, "timezone": "Asia/Kolkata"}},
 			"paise": bson.M{"$sum": "$amount_paise"}, "count": bson.M{"$sum": 1},
 		}}}
 	}
+	// Hours use when the message arrived: SMS dates carry no time, so occurred_at is midnight.
 	pipe := append(mongo.Pipeline{{{Key: "$match", Value: spend.Match(start, end)}}}, spend.Net()...)
-	pipe = append(pipe, bson.D{{Key: "$facet", Value: bson.M{"dow": by("$dayOfWeek"), "hour": by("$hour")}}})
+	pipe = append(pipe, bson.D{{Key: "$facet", Value: bson.M{"dow": by("$dayOfWeek", "$occurred_at"), "hour": by("$hour", bson.M{"$ifNull": bson.A{"$received_at", "$occurred_at"}})}}})
 	cur, err := s.txs.Aggregate(ctx, pipe)
 	if err != nil {
 		return nil, err

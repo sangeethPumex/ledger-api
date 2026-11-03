@@ -14,16 +14,22 @@ import (
 )
 
 type Service struct {
-	txs *mongo.Collection // owned by the transactions module; read only
+	txs  *mongo.Collection // owned by the transactions module; read only
+	cats *mongo.Collection // owned by the categories module; read only
 }
 
-func NewService(db *mongo.Database) *Service { return &Service{txs: db.Collection("transactions")} }
+func NewService(db *mongo.Database) *Service {
+	return &Service{txs: db.Collection("transactions"), cats: db.Collection("categories")}
+}
 
 type Overview struct {
 	Recurring    []Recurring `json:"recurring"`
 	MonthlyPaise int64       `json:"monthly_paise"` // what the active recurring charges cost per month
 	Anomalies    []Anomaly   `json:"anomalies"`
 	Patterns     *Patterns   `json:"patterns"`
+	Pace         *Pace       `json:"pace"`
+	Movers       []Mover     `json:"movers"`
+	TopVendors   []TopVendor `json:"top_vendors"`
 }
 
 // Overview runs the vendor scan and the weekday/hour scan side by side; recurring and anomalies share the first, so the data is read once.
@@ -35,7 +41,7 @@ func (s *Service) Overview(ctx context.Context, now time.Time) (*Overview, error
 		if err != nil {
 			return err
 		}
-		o.Recurring, o.Anomalies = detectRecurring(all, now), detectAnomalies(all, now)
+		o.Recurring, o.Anomalies, o.TopVendors = detectRecurring(all, now), detectAnomalies(all, now), topVendors(all, now, 8)
 		for _, r := range o.Recurring {
 			if r.Status == "active" {
 				o.MonthlyPaise += r.MonthlyPaise
@@ -44,6 +50,7 @@ func (s *Service) Overview(ctx context.Context, now time.Time) (*Overview, error
 		return nil
 	})
 	g.Go(func() (err error) { o.Patterns, err = s.patterns(gctx, now); return })
+	g.Go(func() (err error) { o.Pace, o.Movers, err = s.monthSpend(gctx, now); return })
 	return o, g.Wait()
 }
 
