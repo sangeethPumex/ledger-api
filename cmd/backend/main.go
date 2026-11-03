@@ -15,8 +15,8 @@ import (
 	"ledger-backend/internal/module/accounts"
 	"ledger-backend/internal/module/alerts"
 	"ledger-backend/internal/module/brainjogger"
-	"ledger-backend/internal/module/cards"
 	"ledger-backend/internal/module/budgets"
+	"ledger-backend/internal/module/cards"
 	"ledger-backend/internal/module/categories"
 	"ledger-backend/internal/module/copilot"
 	"ledger-backend/internal/module/dashboard"
@@ -145,7 +145,7 @@ func main() {
 			pcancel()
 		}
 	}()
-
+	// The HTTP API is a thin layer over the services, with auth and routing.
 	mux := http.NewServeMux()
 	categories.RegisterRoutes(mux, categories.NewController(catSvc), auth)
 	vendors.RegisterRoutes(mux, vendors.NewController(vendSvc), auth)
