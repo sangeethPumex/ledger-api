@@ -5,6 +5,8 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"os"
+	"strconv"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -16,10 +18,16 @@ import (
 type Service struct {
 	txs  *mongo.Collection // owned by the transactions module; read only
 	cats *mongo.Collection // owned by the categories module; read only
+
+	inflationPct float64 // yearly, from INFLATION_PCT; 6 when unset or invalid
 }
 
 func NewService(db *mongo.Database) *Service {
-	return &Service{txs: db.Collection("transactions"), cats: db.Collection("categories")}
+	pct, err := strconv.ParseFloat(os.Getenv("INFLATION_PCT"), 64)
+	if err != nil || pct < 0 {
+		pct = 6
+	}
+	return &Service{txs: db.Collection("transactions"), cats: db.Collection("categories"), inflationPct: pct}
 }
 
 type Overview struct {
@@ -30,6 +38,7 @@ type Overview struct {
 	Pace         *Pace       `json:"pace"`
 	Movers       []Mover     `json:"movers"`
 	TopVendors   []TopVendor `json:"top_vendors"`
+	Inflation    *Inflation  `json:"inflation"`
 }
 
 // Overview runs the vendor scan and the weekday/hour scan side by side; recurring and anomalies share the first, so the data is read once.
@@ -51,6 +60,7 @@ func (s *Service) Overview(ctx context.Context, now time.Time) (*Overview, error
 	})
 	g.Go(func() (err error) { o.Patterns, err = s.patterns(gctx, now); return })
 	g.Go(func() (err error) { o.Pace, o.Movers, err = s.monthSpend(gctx, now); return })
+	g.Go(func() (err error) { o.Inflation, err = s.inflation(gctx, now); return })
 	return o, g.Wait()
 }
 
