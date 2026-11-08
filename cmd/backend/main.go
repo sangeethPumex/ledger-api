@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
@@ -64,7 +65,50 @@ func main() {
 	defer cancel()
 	check(client.Ping(ctx, nil))
 
-	db := client.Database(dbName)
+	llm := nim.New("https://integrate.api.nvidia.com/v1/chat/completions", mustEnv("NVIDIA_API_KEY"), model)
+	chatLLM := nim.New("https://cloud.olakrutrim.com/v1/chat/completions", mustEnv("KRUTRIM_API_KEY"), mustEnv("KRUTRIM_MODEL"))
+	yahooURL := os.Getenv("YAHOO_CHART_URL")
+	if yahooURL == "" {
+		yahooURL = "https://query1.finance.yahoo.com/v8/finance/chart"
+	}
+	// Vehicle papers and photos; without S3_BUCKET the garage works but file uploads answer 503.
+	store, err := vehicles.NewStore(ctx, os.Getenv("S3_BUCKET"))
+	check(err)
+
+	// Every user gets their own database, services and background jobs; the API key picks which one answers.
+	users := []user{{Name: "owner", APISecret: apiKey, DB: dbName}}
+	if extra := os.Getenv("USERS"); extra != "" {
+		var more []user
+		check(json.Unmarshal([]byte(extra), &more))
+		users = append(users, more...)
+	}
+	seenKey, seenDB := map[string]bool{}, map[string]bool{}
+	var tenants []middleware.Tenant
+	for _, u := range users {
+		if u.APISecret == "" || u.DB == "" || seenKey[u.APISecret] || seenDB[u.DB] {
+			log.Fatalf("USERS: %q needs its own non-empty api_secret and db", u.Name)
+		}
+		seenKey[u.APISecret], seenDB[u.DB] = true, true
+		tenants = append(tenants, middleware.Tenant{Key: u.APISecret, Handler: build(ctx, client.Database(u.DB), u.APISecret, model, llm, chatLLM, store, yahooURL)})
+	}
+
+	// Every endpoint lives under /finance/api, e.g. /finance/api/transactions.
+	root := http.NewServeMux()
+	root.Handle("/finance/api/", http.StripPrefix("/finance/api", middleware.ByKey(tenants)))
+
+	log.Printf("listening on :%s for %d user(s)", port, len(users))
+	log.Fatal(http.ListenAndServe(":"+port, root))
+}
+
+// user is one person's slice of the app: a database of their own and the key that reaches it. USERS holds a JSON list of these for everyone after the owner.
+type user struct {
+	Name      string `json:"name"`
+	APISecret string `json:"api_secret"`
+	DB        string `json:"db"`
+}
+
+// build wires every module over one user's database and returns their API.
+func build(ctx context.Context, db *mongo.Database, apiKey, model string, llm, chatLLM *nim.Client, store *vehicles.Store, yahooURL string) http.Handler {
 	auth := middleware.APIKey(apiKey)
 	rawSvc := raw_transactions.NewService(db)
 	catSvc, err := categories.NewService(ctx, db)
@@ -75,8 +119,6 @@ func main() {
 	check(err)
 	cardSvc, err := cards.NewService(ctx, db)
 	check(err)
-	llm := nim.New("https://integrate.api.nvidia.com/v1/chat/completions", mustEnv("NVIDIA_API_KEY"), model)
-	chatLLM := nim.New("https://cloud.olakrutrim.com/v1/chat/completions", mustEnv("KRUTRIM_API_KEY"), mustEnv("KRUTRIM_MODEL"))
 	txSvc, err := transactions.NewService(ctx, db, rawSvc, vendSvc, catSvc, accSvc, cardSvc, llm, model)
 	check(err)
 	vendSvc.OnChange = txSvc.Resync
@@ -84,10 +126,6 @@ func main() {
 	check(err)
 	fundSvc, err := funds.NewService(ctx, db)
 	check(err)
-	yahooURL := os.Getenv("YAHOO_CHART_URL")
-	if yahooURL == "" {
-		yahooURL = "https://query1.finance.yahoo.com/v8/finance/chart"
-	}
 	stockSvc := stocks.NewService(db, stocks.NewYahoo(yahooURL))
 	alertSvc, err := alerts.NewService(ctx, db, stockSvc, fundSvc)
 	check(err)
@@ -98,9 +136,6 @@ func main() {
 	mandSvc := mandates.NewService(db)
 	jogSvc := brainjogger.NewService(db)
 	go jogSvc.Run(context.Background(), 30*time.Second)
-	// Vehicle papers and photos; without S3_BUCKET the garage works but file uploads answer 503.
-	store, err := vehicles.NewStore(ctx, os.Getenv("S3_BUCKET"))
-	check(err)
 	vehSvc, err := vehicles.NewService(ctx, db, store, jogSvc)
 	check(err)
 	go vehSvc.Run(context.Background(), time.Hour)
@@ -170,10 +205,5 @@ func main() {
 	vehicles.RegisterRoutes(mux, vehicles.NewController(vehSvc), auth)
 	purge.RegisterRoutes(mux, purge.NewController(purge.NewService(db, accSvc)), auth)
 
-	// Every endpoint lives under /finance/api, e.g. /finance/api/transactions.
-	root := http.NewServeMux()
-	root.Handle("/finance/api/", http.StripPrefix("/finance/api", mux))
-
-	log.Printf("listening on :%s", port)
-	log.Fatal(http.ListenAndServe(":"+port, root))
+	return mux
 }
