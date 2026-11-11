@@ -10,6 +10,6 @@ FROM alpine:3.21
 RUN apk add --no-cache ca-certificates && adduser -D -u 10001 app
 USER app
 COPY --from=build /out/backend /backend
-# Settings (MONGODB_URI, API_SECRET, PORT, ...) come from the environment at run time, never from the image.
+# Settings (SANGEETH_SECRET, SANGEETH_MONGODB_URI, PORT, ...) come from the environment at run time, never from the image.
 EXPOSE 8081
 ENTRYPOINT ["/backend"]

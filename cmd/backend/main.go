@@ -2,10 +2,10 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -55,15 +55,10 @@ func check(err error) {
 
 func main() {
 	_ = godotenv.Load(".env") // real env vars win; missing file is fine
-	uri, dbName, apiKey := mustEnv("MONGODB_URI"), mustEnv("MONGODB_DB"), mustEnv("API_SECRET")
 	model := mustEnv("NVIDIA_MODEL")
 	port := mustEnv("PORT")
-
-	client, err := mongo.Connect(options.Client().ApplyURI(uri))
-	check(err)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	check(client.Ping(ctx, nil))
 
 	llm := nim.New("https://integrate.api.nvidia.com/v1/chat/completions", mustEnv("NVIDIA_API_KEY"), model)
 	chatLLM := nim.New("https://cloud.olakrutrim.com/v1/chat/completions", mustEnv("KRUTRIM_API_KEY"), mustEnv("KRUTRIM_MODEL"))
@@ -75,21 +70,28 @@ func main() {
 	store, err := vehicles.NewStore(ctx, os.Getenv("S3_BUCKET"))
 	check(err)
 
-	// Every user gets their own database, services and background jobs; the API key picks which one answers.
-	users := []user{{Name: "owner", APISecret: apiKey, DB: dbName}}
-	if extra := os.Getenv("USERS"); extra != "" {
-		var more []user
-		check(json.Unmarshal([]byte(extra), &more))
-		users = append(users, more...)
+	// Every user gets their own cluster, database, services and background jobs; the API key picks which one answers.
+	// A person is on when <NAME>_SECRET is set, and then needs <NAME>_MONGODB_URI, _MONGODB_DB and _HOLDER (_PARSE_HINT is optional). Add a name here for a third person.
+	var users []user
+	for _, p := range []string{"SANGEETH", "SILPA"} {
+		if os.Getenv(p+"_SECRET") != "" {
+			users = append(users, user{strings.ToLower(p), os.Getenv(p + "_SECRET"), mustEnv(p + "_MONGODB_URI"), mustEnv(p + "_MONGODB_DB"), mustEnv(p + "_HOLDER"), os.Getenv(p + "_PARSE_HINT")})
+		}
 	}
-	seenKey, seenDB := map[string]bool{}, map[string]bool{}
+	if len(users) == 0 {
+		log.Fatal("set SANGEETH_SECRET (and SILPA_SECRET) with their MONGODB_URI / MONGODB_DB / HOLDER")
+	}
+	seenName, seenKey := map[string]bool{}, map[string]bool{}
 	var tenants []middleware.Tenant
 	for _, u := range users {
-		if u.APISecret == "" || u.DB == "" || seenKey[u.APISecret] || seenDB[u.DB] {
-			log.Fatalf("USERS: %q needs its own non-empty api_secret and db", u.Name)
+		if u.Name == "" || u.APISecret == "" || u.MongoURI == "" || u.DB == "" || u.Holder == "" || seenName[u.Name] || seenKey[u.APISecret] {
+			log.Fatalf("%q needs its own secret, mongodb_uri, db and holder (two people cannot share a secret)", u.Name)
 		}
-		seenKey[u.APISecret], seenDB[u.DB] = true, true
-		tenants = append(tenants, middleware.Tenant{Key: u.APISecret, Handler: build(ctx, client.Database(u.DB), u.APISecret, model, llm, chatLLM, store, yahooURL)})
+		seenName[u.Name], seenKey[u.APISecret] = true, true
+		client, err := mongo.Connect(options.Client().ApplyURI(u.MongoURI))
+		check(err)
+		check(client.Ping(ctx, nil))
+		tenants = append(tenants, middleware.Tenant{Key: u.APISecret, Handler: build(ctx, client.Database(u.DB), u, model, llm, chatLLM, store, yahooURL)})
 	}
 
 	// Every endpoint lives under /finance/api, e.g. /finance/api/transactions.
@@ -100,16 +102,13 @@ func main() {
 	log.Fatal(http.ListenAndServe(":"+port, root))
 }
 
-// user is one person's slice of the app: a database of their own and the key that reaches it. USERS holds a JSON list of these for everyone after the owner.
-type user struct {
-	Name      string `json:"name"`
-	APISecret string `json:"api_secret"`
-	DB        string `json:"db"`
-}
+// user is one person's slice of the app: a cluster and database of their own and the key that reaches it.
+// Holder is the name on their bank accounts (so own-account moves read as transfers); ParseHint is optional extra SMS-parsing rules.
+type user struct{ Name, APISecret, MongoURI, DB, Holder, ParseHint string }
 
 // build wires every module over one user's database and returns their API.
-func build(ctx context.Context, db *mongo.Database, apiKey, model string, llm, chatLLM *nim.Client, store *vehicles.Store, yahooURL string) http.Handler {
-	auth := middleware.APIKey(apiKey)
+func build(ctx context.Context, db *mongo.Database, u user, model string, llm, chatLLM *nim.Client, store *vehicles.Store, yahooURL string) http.Handler {
+	auth := middleware.APIKey(u.APISecret)
 	rawSvc := raw_transactions.NewService(db)
 	catSvc, err := categories.NewService(ctx, db)
 	check(err)
@@ -121,6 +120,7 @@ func build(ctx context.Context, db *mongo.Database, apiKey, model string, llm, c
 	check(err)
 	txSvc, err := transactions.NewService(ctx, db, rawSvc, vendSvc, catSvc, accSvc, cardSvc, llm, model)
 	check(err)
+	txSvc.Holder, txSvc.ParseHint = u.Holder, u.ParseHint
 	vendSvc.OnChange = txSvc.Resync
 	emiSvc, err := emis.NewService(ctx, db)
 	check(err)

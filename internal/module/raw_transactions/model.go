@@ -19,6 +19,7 @@ const (
 
 type RawTransaction struct {
 	ID         bson.ObjectID `bson:"_id" json:"id"`
+	User       string        `bson:"user,omitempty" json:"user,omitempty"` // who sent it; absent on messages from before users existed
 	Message    string        `bson:"message" json:"message"`
 	ReceivedAt time.Time     `bson:"received_at" json:"received_at"`
 	Status     string        `bson:"status" json:"status"`

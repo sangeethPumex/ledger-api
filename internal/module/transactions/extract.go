@@ -27,8 +27,8 @@ type extraction struct {
 	SuggestedCategory string      `json:"suggested_category"`
 }
 
-func systemPrompt(categories []string) string {
-	return `You extract data from one Indian bank SMS. Reply with ONE JSON object only, no prose, with exactly these keys:
+func systemPrompt(categories []string, holder, hint string) string {
+	p := `You extract data from one Indian bank SMS. Reply with ONE JSON object only, no prose, with exactly these keys:
 is_transaction (bool; false for OTPs, promos, balance alerts, anything that is not a money movement),
 type (one of: expense, income, transfer, card_bill_payment, refund, atm, emi),
 direction ("debit" if money left the account, "credit" if money came in),
@@ -49,7 +49,7 @@ Rules:
 - Debit: raw_vendor is the payee ("to X", "To X", "Fvg: X", or the UPI id when no name is given). Credit: raw_vendor is the sender ("from X", "from VPA x@bank"), or "" when the SMS names no sender.
 - A leading "*" on a UPI id is masking, drop it: "VPA *ms-2@oksbi" gives upi_id "ms-2@oksbi". Truncated ids like "reyvanthrm@o" stay as written.
 - A credit described as a reversal ("Rev Tran", "reversal") is "refund".
-- The account holder is SANGEETH PROMOD. Money sent to or received from that name is the user's own money moving between accounts: type "transfer".
+- The account holder is ` + holder + `. Money sent to or received from that name is the user's own money moving between accounts: type "transfer".
 - Delivery apps and restaurants (e.g. SWIGGY) are "expense"; use the nearest food category.
 
 Examples (SMS => JSON):
@@ -67,12 +67,16 @@ A/c *3109 Credited for Rs.2.00 on 08-10-2026 17:33:34 by Mob Bk Rev Tran ref no 
 => {"is_transaction":true,"type":"refund","direction":"credit","amount":2,"occurred_at":"2026-10-08 17:33","bank":"Union Bank of India","account_last4":"3109","ref":"628168514875","raw_vendor":"","upi_id":"","suggested_category":""}
 Sent Rs.60.00 from Kotak Bank A/c X9959 to Transasia on 26-10-26. UPI Ref 629972201789. Not done by you? Tap https://kotak.bank.in/KBANKT/Fraud
 => {"is_transaction":true,"type":"expense","direction":"debit","amount":60,"occurred_at":"2026-10-26","bank":"Kotak Bank","account_last4":"9959","ref":"629972201789","raw_vendor":"Transasia","upi_id":"","suggested_category":""}
-Received Rs.1.00 in your Kotak Bank AC 9959 from SANGEETH PROMOD on 26-10-26.UPI Ref:629939471266
-=> {"is_transaction":true,"type":"transfer","direction":"credit","amount":1,"occurred_at":"2026-10-26","bank":"Kotak Bank","account_last4":"9959","ref":"629939471266","raw_vendor":"SANGEETH PROMOD","upi_id":"","suggested_category":""}
+Received Rs.1.00 in your Kotak Bank AC 9959 from ` + holder + ` on 26-10-26.UPI Ref:629939471266
+=> {"is_transaction":true,"type":"transfer","direction":"credit","amount":1,"occurred_at":"2026-10-26","bank":"Kotak Bank","account_last4":"9959","ref":"629939471266","raw_vendor":"` + holder + `","upi_id":"","suggested_category":""}
 Your OTP for login is 482910. Do not share it.
 => {"is_transaction":false}
 
 In the examples suggested_category is a placeholder: always pick from the allowed list above, or "" if none fits.`
+	if hint != "" {
+		p += "\n\nExtra rules for this user's messages:\n" + hint
+	}
+	return p
 }
 
 // parseExtraction pulls the JSON object out of the model reply and validates it.

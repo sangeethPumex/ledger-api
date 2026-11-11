@@ -1,6 +1,7 @@
 package transactions
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -36,5 +37,17 @@ func TestParseExtraction(t *testing.T) {
 	}
 	if e, _, _, err := parseExtraction(`{"is_transaction":false}`, msg, recv); err != nil || e.IsTransaction {
 		t.Error("non-transaction mishandled")
+	}
+}
+
+func TestSystemPromptPerUser(t *testing.T) {
+	p := systemPrompt([]string{"Food"}, "SILPA X", "Her bank is ICICI.")
+	for _, want := range []string{"account holder is SILPA X", "from SILPA X on", "Her bank is ICICI."} {
+		if !strings.Contains(p, want) {
+			t.Errorf("prompt missing %q", want)
+		}
+	}
+	if strings.Contains(p, "SANGEETH") || strings.Contains(systemPrompt(nil, "A", ""), "Extra rules") {
+		t.Error("owner name leaked or empty hint added a section")
 	}
 }

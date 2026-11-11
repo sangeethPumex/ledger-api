@@ -33,6 +33,8 @@ type Service struct {
 	cards      *cards.Service
 	llm        Chatter
 	model      string
+	Holder     string // name on this user's bank accounts, put into the parse prompt
+	ParseHint  string // optional extra parse rules for this user
 }
 
 func NewService(ctx context.Context, db *mongo.Database, raw *raw_transactions.Service, v *vendors.Service, c *categories.Service, acc *accounts.Service, cd *cards.Service, llm Chatter, model string) (*Service, error) {
@@ -84,7 +86,7 @@ func (s *Service) Parse(ctx context.Context, rawID bson.ObjectID) error {
 	for i, c := range cats {
 		names[i] = c.Name
 	}
-	reply, err := s.llm.Chat(ctx, systemPrompt(names), raw.Message)
+	reply, err := s.llm.Chat(ctx, systemPrompt(names, s.Holder, s.ParseHint), raw.Message)
 	if err != nil {
 		return fail("llm_error", err)
 	}
