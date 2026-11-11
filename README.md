@@ -24,7 +24,7 @@
 |---|---|
 | Language | Go 1.26, standard library `net/http` |
 | Database | MongoDB (Atlas), driver v2, one cluster per person |
-| LLMs | NVIDIA NIM (parsing), Krutrim (chat), via an OpenAI-style client in `internal/nim` |
+| LLM | Gemini (parsing and chat), via an OpenAI-style client in `internal/nim` |
 | Market data | Yahoo chart API (stocks), mutual fund NAVs |
 | Files | S3 (vehicle papers and photos), optional |
 | Push | Web Push with VAPID keys |
@@ -83,8 +83,7 @@ A person is switched on when `<NAME>_SECRET` is set. Today the names are `SANGEE
 | Variable | Required | Meaning |
 |---|---|---|
 | `PORT` | yes | HTTP port (the Dockerfile exposes 8081) |
-| `NVIDIA_API_KEY`, `NVIDIA_MODEL` | yes | LLM used to parse messages |
-| `KRUTRIM_API_KEY`, `KRUTRIM_MODEL` | yes | LLM used for dashboard chat |
+| `GEMINI_API_KEY`, `GEMINI_MODEL` | yes | LLM used to parse messages into transactions and for dashboard chat |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | for push | Generate with `go run ./cmd/vapidgen` |
 | `S3_BUCKET`, `AWS_REGION` | for uploads | Without a bucket, file uploads answer 503 |
 | `YAHOO_CHART_URL` | no | Override the stock price source |
@@ -94,10 +93,8 @@ Example `.env` (values are placeholders):
 
 ```env
 PORT=8081
-NVIDIA_API_KEY=...
-NVIDIA_MODEL=...
-KRUTRIM_API_KEY=...
-KRUTRIM_MODEL=...
+GEMINI_API_KEY=...
+GEMINI_MODEL=gemini-3.1-flash-lite
 
 SANGEETH_SECRET=<long random string>
 SANGEETH_MONGODB_URI=mongodb+srv://<user>:<password>@<cluster>/?retryWrites=true&w=majority

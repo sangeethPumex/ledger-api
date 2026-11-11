@@ -55,13 +55,14 @@ func check(err error) {
 
 func main() {
 	_ = godotenv.Load(".env") // real env vars win; missing file is fine
-	model := mustEnv("NVIDIA_MODEL")
+	model := mustEnv("GEMINI_MODEL") // gemini-3.1-flash-lite: 15 requests/min, 500/day, 250K tokens/min on the free tier
 	port := mustEnv("PORT")
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// One budget for connecting every user's cluster and building their services (index creation); slow Atlas links need more than 10s.
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	llm := nim.New("https://integrate.api.nvidia.com/v1/chat/completions", mustEnv("NVIDIA_API_KEY"), model)
-	chatLLM := nim.New("https://cloud.olakrutrim.com/v1/chat/completions", mustEnv("KRUTRIM_API_KEY"), mustEnv("KRUTRIM_MODEL"))
+	// Gemini (OpenAI-compatible endpoint) does both jobs: parsing messages into transactions and the dashboard chat.
+	chatLLM := nim.New("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", mustEnv("GEMINI_API_KEY"), model)
 	yahooURL := os.Getenv("YAHOO_CHART_URL")
 	if yahooURL == "" {
 		yahooURL = "https://query1.finance.yahoo.com/v8/finance/chart"
@@ -91,7 +92,7 @@ func main() {
 		client, err := mongo.Connect(options.Client().ApplyURI(u.MongoURI))
 		check(err)
 		check(client.Ping(ctx, nil))
-		tenants = append(tenants, middleware.Tenant{Key: u.APISecret, Handler: build(ctx, client.Database(u.DB), u, model, llm, chatLLM, store, yahooURL)})
+		tenants = append(tenants, middleware.Tenant{Key: u.APISecret, Handler: build(ctx, client.Database(u.DB), u, chatLLM, store, yahooURL)})
 	}
 
 	// Every endpoint lives under /finance/api, e.g. /finance/api/transactions.
@@ -107,7 +108,7 @@ func main() {
 type user struct{ Name, APISecret, MongoURI, DB, Holder, ParseHint string }
 
 // build wires every module over one user's database and returns their API.
-func build(ctx context.Context, db *mongo.Database, u user, model string, llm, chatLLM *nim.Client, store *vehicles.Store, yahooURL string) http.Handler {
+func build(ctx context.Context, db *mongo.Database, u user, chatLLM *nim.Client, store *vehicles.Store, yahooURL string) http.Handler {
 	auth := middleware.APIKey(u.APISecret)
 	rawSvc := raw_transactions.NewService(db)
 	catSvc, err := categories.NewService(ctx, db)
@@ -118,7 +119,7 @@ func build(ctx context.Context, db *mongo.Database, u user, model string, llm, c
 	check(err)
 	cardSvc, err := cards.NewService(ctx, db)
 	check(err)
-	txSvc, err := transactions.NewService(ctx, db, rawSvc, vendSvc, catSvc, accSvc, cardSvc, llm, model)
+	txSvc, err := transactions.NewService(ctx, db, rawSvc, vendSvc, catSvc, accSvc, cardSvc, chatLLM, chatLLM.Model)
 	check(err)
 	txSvc.Holder, txSvc.ParseHint = u.Holder, u.ParseHint
 	vendSvc.OnChange = txSvc.Resync

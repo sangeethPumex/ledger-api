@@ -51,3 +51,14 @@ func TestSystemPromptPerUser(t *testing.T) {
 		t.Error("owner name leaked or empty hint added a section")
 	}
 }
+
+func TestParseExtractionInventedType(t *testing.T) {
+	reply := `{"is_transaction":true,"type":"investments","direction":"debit","amount":5000,"ref":""}`
+	e, _, _, err := parseExtraction(reply, "Sent Rs.5000", time.Now())
+	if err != nil || e.Type != "expense" {
+		t.Fatalf("got %v, %v; want expense", e, err)
+	}
+	if _, _, _, err := parseExtraction(`{"is_transaction":true,"type":"x","amount":5}`, "m", time.Now()); err == nil {
+		t.Fatal("no direction and a bad type must still fail")
+	}
+}

@@ -1,4 +1,4 @@
-// Package nim is a minimal OpenAI-compatible chat-completions client (NVIDIA NIM, Krutrim).
+// Package nim is a minimal OpenAI-compatible chat-completions client (Gemini).
 package nim
 
 import (
@@ -23,8 +23,8 @@ type Client struct {
 	next            time.Time // earliest start of the next Chat call
 }
 
-// minGap keeps Chat under NVIDIA's 40 requests/minute free quota.
-const minGap = 1600 * time.Millisecond
+// minGap keeps Chat under Gemini's 15 requests/minute free quota.
+const minGap = 4100 * time.Millisecond
 
 // pace blocks until this call's slot; calls are spaced minGap apart.
 func (c *Client) pace(ctx context.Context) error {

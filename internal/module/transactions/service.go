@@ -98,6 +98,16 @@ func (s *Service) Parse(ctx context.Context, rawID bson.ObjectID) error {
 		return s.raw.SetStatus(ctx, rawID, raw_transactions.StatusIgnored, "")
 	}
 
+	// The same SMS can arrive twice (a re-sent webhook); one payment must count once. Direction is part of the key because
+	// a move between own accounts sends a debit and a credit SMS with one ref.
+	if e.Ref != "" {
+		if n, err := s.col.CountDocuments(ctx, bson.M{"ref": e.Ref, "direction": e.Direction}); err != nil {
+			return fail("db_error", err)
+		} else if n > 0 {
+			return s.raw.SetStatus(ctx, rawID, raw_transactions.StatusIgnored, "duplicate")
+		}
+	}
+
 	t := Transaction{
 		ID: bson.NewObjectID(), RawID: rawID, Type: e.Type, AmountPaise: paise, OccurredAt: at, ReceivedAt: raw.ReceivedAt,
 		Bank: e.Bank, Direction: e.Direction, AccountLast4: e.AccountLast4, Ref: e.Ref,

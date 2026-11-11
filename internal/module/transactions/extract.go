@@ -94,7 +94,15 @@ func parseExtraction(reply, message string, receivedAt time.Time) (*extraction, 
 		return &e, 0, time.Time{}, nil
 	}
 	if !validTypes[e.Type] {
-		return nil, 0, time.Time{}, errors.New("bad type")
+		// Smaller models invent types ("investments"); the direction still tells expense from income.
+		switch e.Direction {
+		case "debit":
+			e.Type = "expense"
+		case "credit":
+			e.Type = "income"
+		default:
+			return nil, 0, time.Time{}, errors.New("bad type")
+		}
 	}
 	paise, err := toPaise(e.Amount.String())
 	if err != nil || paise <= 0 || paise > maxPaise {
