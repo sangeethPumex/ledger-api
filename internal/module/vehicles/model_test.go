@@ -42,6 +42,21 @@ func TestMileage(t *testing.T) {
 	}
 }
 
+func TestMileageEstimate(t *testing.T) {
+	logs := []Log{
+		{Kind: "fuel", Date: "2026-10-01", OdometerKm: 6_000, Litres: 20, AmountPaise: 200_000},
+		{Kind: "fuel", Date: "2026-10-10", OdometerKm: 131, Litres: 30, AmountPaise: 300_000}, // trip km typed as the odometer: skipped, litres still count
+		{Kind: "fuel", Date: "2026-10-20", OdometerKm: 6_800, Litres: 25, AmountPaise: 250_000},
+	}
+	s := Build(Vehicle{TankLitres: 40}, logs, now)
+	if !s.Estimated || s.AvgKmpl != 14.55 || len(s.Fills) != 0 { // 800 km over the 55 l bought after the first fill
+		t.Fatalf("estimate = %+v", s)
+	}
+	if s := Build(Vehicle{}, logs[:1], now); s.AvgKmpl != 0 || s.Estimated {
+		t.Fatalf("one reading cannot measure a distance: %+v", s)
+	}
+}
+
 func TestServiceSchedule(t *testing.T) {
 	v := Vehicle{ServiceMonths: 12, BoughtOn: "2026-02-10", CreatedAt: now}
 	if ns := Build(v, nil, now).NextService; ns == nil || ns.Suggested != "2027-02-10" || ns.DueDate != "2027-02-10" {

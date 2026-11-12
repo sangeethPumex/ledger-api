@@ -255,6 +255,7 @@ type NextService struct {
 type Stats struct {
 	OdometerKm int     `json:"odometer_km"`
 	AvgKmpl    float64 `json:"avg_kmpl,omitempty"`
+	Estimated  bool    `json:"kmpl_estimated,omitempty"` // AvgKmpl comes from the odometer span, not from full tanks
 	LastKmpl   float64 `json:"last_kmpl,omitempty"`
 	BestKmpl   float64 `json:"best_kmpl,omitempty"`
 	Fills      []Fill  `json:"fills"`
@@ -288,6 +289,38 @@ func round(f float64, places int) float64 {
 func daysUntil(date string, today time.Time) int {
 	d, _ := time.ParseInLocation(day, date, ist.Loc)
 	return int(math.Round(d.Sub(today).Hours() / 24))
+}
+
+// minEstimateKm is the shortest odometer span worth an estimate: over less, the unknown fuel left in the tank swamps the litres bought.
+const minEstimateKm = 300
+
+// estimate is mileage without full tanks: the km between the first and last odometer readings over the litres bought after the first
+// fill, up to the last. It is right when the tank is about as full at the end as at the start, so the longer the span the better.
+// A reading lower than the one before is a typo (often the trip distance) and is skipped.
+func estimate(logs []Log) (km int, litres float64) {
+	var fuel []Log
+	for _, l := range logs {
+		if l.Kind == "fuel" {
+			fuel = append(fuel, l)
+		}
+	}
+	sort.SliceStable(fuel, func(i, j int) bool { return fuel[i].Date < fuel[j].Date })
+	first, last, high := -1, -1, 0
+	for i, f := range fuel {
+		if f.OdometerKm > high {
+			if first < 0 {
+				first = i
+			}
+			last, high = i, f.OdometerKm
+		}
+	}
+	if first < 0 || last == first {
+		return 0, 0
+	}
+	for _, f := range fuel[first+1 : last+1] {
+		litres += f.Litres
+	}
+	return high - fuel[first].OdometerKm, litres
 }
 
 // mileage walks the fuel logs in order: the km between two full tanks, over every litre bought after the first of them. A fill with no
@@ -416,6 +449,11 @@ func Build(v Vehicle, logs []Log, now time.Time) Stats {
 	if litres > 0 {
 		s.AvgKmpl = round(float64(km)/litres, 2)
 		s.LastKmpl = s.Fills[len(s.Fills)-1].Kmpl
+	}
+	if litres == 0 { // no two full tanks to measure between
+		if k, l := estimate(logs); k >= minEstimateKm && l > 0 {
+			s.AvgKmpl, s.Estimated = round(float64(k)/l, 2), true
+		}
 	}
 	if lastFuel != nil && lastFuel.Litres > 0 {
 		s.PricePerL = round(float64(lastFuel.AmountPaise)/100/lastFuel.Litres, 2)
