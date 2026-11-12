@@ -45,7 +45,7 @@ func planPatch(t Transaction, cp bson.ObjectID, cat, card *bson.ObjectID, clearC
 	newCat := t.CategoryID
 	if cat != nil {
 		newCat = cat
-		set["category_id"], set["category_set"] = *cat, true
+		set["category_id"], set["category_set"], set["needs_review"] = *cat, true, false // a hand-picked category settles the review
 	}
 	inCP := newCat != nil && *newCat == cp
 	link := t.PaidCardID

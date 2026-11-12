@@ -134,6 +134,18 @@ func (s *Service) aggregate(ctx context.Context, from, to time.Time) ([]flowDoc,
 				"txns": bson.M{"$topN": bson.M{"n": 8, "sortBy": bson.M{"amount_paise": -1},
 					"output": bson.M{"id": "$_id", "vendor": "$_label", "at": bson.M{"$ifNull": bson.A{"$received_at", "$occurred_at"}}, "paise": "$amount_paise", "acc": "$account_id", "card": "$card_id"}}},
 			}}},
+			// Spend per vendor (investments left out), stored as flows with dir "vendor" so the flows list carries them.
+			"vendors": bson.A{
+				bson.M{"$match": bson.M{"_dir": "out"}},
+				bson.M{"$match": bson.M{"$expr": bson.M{"$not": bson.A{bson.M{"$regexMatch": bson.M{"input": "$_cat", "regex": investPattern, "options": "i"}}}}}},
+				bson.M{"$group": bson.M{
+					"_id":   bson.M{"dir": "vendor", "name": "$_label"},
+					"paise": bson.M{"$sum": "$amount_paise"},
+					"count": bson.M{"$sum": 1},
+					"txns": bson.M{"$topN": bson.M{"n": 8, "sortBy": bson.M{"amount_paise": -1},
+						"output": bson.M{"id": "$_id", "vendor": "$_label", "at": bson.M{"$ifNull": bson.A{"$received_at", "$occurred_at"}}, "paise": "$amount_paise", "acc": "$account_id", "card": "$card_id"}}},
+				}},
+			},
 			"daily": bson.A{
 				bson.M{"$match": bson.M{"_dir": "out"}},
 				bson.M{"$match": bson.M{"$expr": bson.M{"$not": bson.A{bson.M{"$regexMatch": bson.M{"input": "$_name", "regex": investPattern, "options": "i"}}}}}},
@@ -151,13 +163,14 @@ func (s *Service) aggregate(ctx context.Context, from, to time.Time) ([]flowDoc,
 		return nil, nil, err
 	}
 	var res []struct {
-		Flows []flowDoc `bson:"flows"`
-		Daily []dayDoc  `bson:"daily"`
+		Flows   []flowDoc `bson:"flows"`
+		Vendors []flowDoc `bson:"vendors"`
+		Daily   []dayDoc  `bson:"daily"`
 	}
 	if err := cur.All(ctx, &res); err != nil || len(res) == 0 {
 		return nil, nil, err
 	}
-	return res[0].Flows, res[0].Daily, nil
+	return append(res[0].Flows, res[0].Vendors...), res[0].Daily, nil
 }
 
 // cardPayments sums the bill payments (type card_bill_payment, money going out) of a window, with the biggest ones. nil when there are none.
@@ -242,8 +255,11 @@ func (n names) flows(docs []flowDoc, dir string) []Flow {
 		}
 		f := Flow{ID: dir + "-" + d.ID.Name, Name: d.ID.Name, Paise: d.Paise, Count: d.Count, Txns: make([]TxnView, 0, len(d.Txns))}
 		f.Tone = "income"
-		if dir == "out" {
+		switch dir {
+		case "out":
 			f.Tone = classify(d.ID.Name)
+		case "vendor":
+			f.Tone = "spend"
 		}
 		for _, t := range d.Txns {
 			f.Txns = append(f.Txns, TxnView{ID: t.ID.Hex(), Vendor: t.Vendor, Source: n.source(t.Acc, t.Card), At: t.At.UTC().Format(time.RFC3339), Paise: t.Paise})
@@ -439,6 +455,7 @@ func (s *Service) Get(ctx context.Context, r Range, key string, now time.Time) (
 		earlierIncome, earlierSpent = paise(prof.Prior.Income), paise(prof.Prior.Spent)
 	}
 	cf := buildCashflow(n.flows(flowDocs, "in"), n.flows(flowDocs, "out"), earlierIncome, earlierSpent)
+	cf.Vendors = topFlows(n.flows(flowDocs, "vendor"), 7, "Other", "spend")
 	cf.Daily = fillDays(periodDays, r, now)
 	if cf.CardPayments, err = s.cardPayments(ctx, r.From, r.To, n); err != nil {
 		return nil, err

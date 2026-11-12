@@ -52,7 +52,9 @@ type Order struct {
 	ItemCount  int       `bson:"item_count" json:"item_count"`
 	Bill       *Bill     `bson:"bill,omitempty" json:"bill,omitempty"`
 	Payment    string    `bson:"payment,omitempty" json:"payment,omitempty"`
-	SyncedAt   time.Time `bson:"synced_at" json:"synced_at"`
+	// TransactionID is the bank transaction (SMS) this order was paid with, once the linker has matched it.
+	TransactionID *bson.ObjectID `bson:"transaction_id,omitempty" json:"transaction_id,omitempty"`
+	SyncedAt      time.Time      `bson:"synced_at" json:"synced_at"`
 }
 
 // Cancelled orders are listed but not counted as spend.
@@ -68,6 +70,8 @@ type caller interface {
 type Service struct {
 	col    *mongo.Collection
 	swiggy caller
+	// AfterSync, when set, runs in the background after each sync that reached Swiggy (the linker hangs here).
+	AfterSync func(ctx context.Context)
 }
 
 func NewService(ctx context.Context, db *mongo.Database, sw caller) (*Service, error) {
@@ -339,7 +343,51 @@ func (s *Service) Sync(ctx context.Context) (int, map[string]string, error) {
 		}
 		n++
 	}
+	if s.AfterSync != nil {
+		go s.AfterSync(context.Background())
+	}
 	return n, errs, nil
+}
+
+// Unlinked lists the counted Instamart orders placed since t that have no bank transaction yet, oldest first.
+func (s *Service) Unlinked(ctx context.Context, t time.Time) ([]Order, error) {
+	cur, err := s.col.Find(ctx, bson.M{"source": SourceInstamart, "placed_at": bson.M{"$gte": t}, "transaction_id": bson.M{"$exists": false}}, options.Find().SetSort(bson.D{{Key: "placed_at", Value: 1}}))
+	if err != nil {
+		return nil, err
+	}
+	var all, out []Order
+	if err := cur.All(ctx, &all); err != nil {
+		return nil, err
+	}
+	for _, o := range all {
+		if o.Counts() {
+			out = append(out, o)
+		}
+	}
+	return out, nil
+}
+
+// Link records the transaction an order was paid with.
+func (s *Service) Link(ctx context.Context, source, orderID string, tx bson.ObjectID) error {
+	_, err := s.col.UpdateOne(ctx, bson.M{"source": source, "order_id": orderID}, bson.M{"$set": bson.M{"transaction_id": tx}})
+	return err
+}
+
+// Linked is which of the given transactions already belong to an order.
+func (s *Service) Linked(ctx context.Context, ids []bson.ObjectID) (map[bson.ObjectID]bool, error) {
+	cur, err := s.col.Find(ctx, bson.M{"transaction_id": bson.M{"$in": ids}})
+	if err != nil {
+		return nil, err
+	}
+	var os []Order
+	if err := cur.All(ctx, &os); err != nil {
+		return nil, err
+	}
+	out := map[bson.ObjectID]bool{}
+	for _, o := range os {
+		out[*o.TransactionID] = true
+	}
+	return out, nil
 }
 
 // Spend is one source's total for the month, cancelled orders left out.

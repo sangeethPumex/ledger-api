@@ -214,7 +214,7 @@ func build(ctx context.Context, db *mongo.Database, u user, chatLLM *nim.Client,
 	if swiggyRedirect == "" {
 		swiggyRedirect = "http://localhost:3000/grocery/callback"
 	}
-	habSvc, err := pantry.Register(ctx, mux, db, swiggyRedirect, auth, chatLLM)
+	habSvc, err := pantry.Register(ctx, mux, db, swiggyRedirect, auth, chatLLM, txSvc, catSvc)
 	check(err)
 	copSvc.UseHabits(habSvc) // the food-habit nudge reads what the grocery module found
 

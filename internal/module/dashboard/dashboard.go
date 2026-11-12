@@ -62,6 +62,7 @@ type Cashflow struct {
 	SavingsRate  *float64 `json:"savingsRate,omitempty"` // (income - spent) / income; investments count as saved
 	Sources      []Flow   `json:"sources"`
 	Dests        []Flow   `json:"dests"`
+	Vendors      []Flow   `json:"vendors"` // where spending went, by vendor; the biggest few and "Other"
 	Daily        []Day    `json:"daily"`
 	EarlierSpent int64    `json:"earlierSpentPaise"` // before Catalyst, already included above
 	// CardPayments is what was paid toward credit card bills in the period. The purchases it settles are already in Spent, so it is shown
@@ -150,6 +151,7 @@ func buildCashflow(income, out []Flow, earlierIncome, earlierSpent int64) Cashfl
 	if cf.Dests == nil {
 		cf.Dests = []Flow{}
 	}
+	cf.Vendors = []Flow{}
 	return cf
 }
 
