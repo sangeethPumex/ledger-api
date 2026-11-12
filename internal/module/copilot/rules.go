@@ -36,6 +36,7 @@ var kinds = map[string]struct {
 	"weekend":    {"Weekend spending", false},
 	"category":   {"Budget pace", false},
 	"vendor":     {"Repeat orders", false},
+	"habit":      {"Food-order habits", false},
 	"commitment": {"Bills short of cash", true},
 	"card_due":   {"Card dues", true},
 	"price":      {"Price rises", false},
@@ -127,6 +128,18 @@ func (st *State) Rules() []Nudge {
 			add(nudge("card_due", c.ID.Hex()+"|"+s.DueDate, fmt.Sprintf("%s due in %s: %s", c.Name, plural(max(s.DaysToDue, 0), "day"), Rs(s.UnpaidPaise)),
 				fmt.Sprintf("Paying only the minimum would cost about %s in interest.", Rs(s.InterestIfMinPaise)), "bad", s.UnpaidPaise, "Pay it", "/cards?card="+c.ID.Hex()))
 		}
+	}
+
+	// Before the craving: a food habit due within the half hour, with what it costs in runway and a cheaper way if one was found.
+	for _, hd := range st.FoodHabits {
+		if d := hd.NextAt.Sub(st.Now); d <= 0 || d > 40*time.Minute {
+			continue
+		}
+		body := fmt.Sprintf("%s That is %s a month, %.1f days of runway.", hd.Line, Rs(hd.MonthlyPaise), st.RunwayDays(hd.MonthlyPaise))
+		if hd.Alt != "" {
+			body += " Cheaper: " + hd.Alt + "."
+		}
+		add(nudge("habit", hd.Key+"|"+day, hd.Title+" is coming up", body, "info", hd.MonthlyPaise/4, "See habits", "/grocery"))
 	}
 
 	// Recurring

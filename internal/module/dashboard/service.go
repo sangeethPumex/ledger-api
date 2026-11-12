@@ -12,7 +12,6 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
 	"ledger-backend/internal/ist"
-	"ledger-backend/internal/spend"
 	"ledger-backend/internal/module/accounts"
 	"ledger-backend/internal/module/cards"
 	"ledger-backend/internal/module/copilot"
@@ -23,6 +22,7 @@ import (
 	"ledger-backend/internal/module/snapshots"
 	"ledger-backend/internal/module/stocks"
 	"ledger-backend/internal/nim"
+	"ledger-backend/internal/spend"
 )
 
 // Chatter is the LLM call (nim.Client satisfies it).
@@ -44,8 +44,8 @@ type Service struct {
 	mandates *mandates.Service
 	llm      Chatter
 	snaps    *snapshots.Service // daily rows; nil in tests
-	copilot  *copilot.Service  // deterministic safe-to-spend and purchase answers; nil in tests
-	chats    *mongo.Collection // saved AI conversations, owned here
+	copilot  *copilot.Service   // deterministic safe-to-spend and purchase answers; nil in tests
+	chats    *mongo.Collection  // saved AI conversations, owned here
 
 	sumMu sync.Mutex
 	sums  map[string]cachedSummary // 60 s dashboard summaries for the AI paths
@@ -115,9 +115,9 @@ func (s *Service) aggregate(ctx context.Context, from, to time.Time) ([]flowDoc,
 		{{Key: "$lookup", Value: bson.M{"from": "categories", "localField": "category_id", "foreignField": "_id", "as": "cat"}}},
 		{{Key: "$lookup", Value: bson.M{"from": "vendors", "localField": "vendor_id", "foreignField": "_id", "as": "ven"}}},
 		{{Key: "$addFields", Value: bson.M{
-			"_dir": bson.M{"$cond": bson.A{bson.M{"$eq": bson.A{"$type", "income"}}, "in", "out"}},
+			"_dir":   bson.M{"$cond": bson.A{bson.M{"$eq": bson.A{"$type", "income"}}, "in", "out"}},
 			"_label": labelExpr(),
-			"_cat":  bson.M{"$ifNull": bson.A{bson.M{"$first": "$cat.name"}, "Uncategorised"}},
+			"_cat":   bson.M{"$ifNull": bson.A{bson.M{"$first": "$cat.name"}, "Uncategorised"}},
 		}}},
 		{{Key: "$addFields", Value: bson.M{"_name": bson.M{"$switch": bson.M{
 			"branches": bson.A{

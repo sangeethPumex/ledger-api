@@ -59,11 +59,11 @@ type Snapshot struct {
 	Invested    int64  `bson:"invested" json:"investedPaise"`
 	Investments int64  `bson:"investments" json:"investmentsPaise"`
 	NetWorth    int64  `bson:"net_worth" json:"netWorthPaise"`
-	Owed        *int64 `bson:"owed,omitempty" json:"owedPaise,omitempty"`           // EMI principal still owed
-	CardUsed    *int64 `bson:"card_used,omitempty" json:"cardUsedPaise,omitempty"`  // credit used across cards; live rows only
+	Owed        *int64 `bson:"owed,omitempty" json:"owedPaise,omitempty"`          // EMI principal still owed
+	CardUsed    *int64 `bson:"card_used,omitempty" json:"cardUsedPaise,omitempty"` // credit used across cards; live rows only
 
 	// The day's own movement.
-	Spent        int64 `bson:"spent" json:"spentPaise"`        // the user's spending, as the dashboard counts it
+	Spent        int64 `bson:"spent" json:"spentPaise"`            // the user's spending, as the dashboard counts it
 	SpentMonth   int64 `bson:"spent_month" json:"spentMonthPaise"` // spending from the 1st to this day
 	SpendTxns    int   `bson:"spend_txns" json:"spendTxns"`
 	Income       int64 `bson:"income" json:"incomePaise"`

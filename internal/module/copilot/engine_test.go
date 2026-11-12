@@ -385,3 +385,23 @@ func TestRupeeViewConvertsPaise(t *testing.T) {
 		t.Fatalf("nested = %v", m["committed"])
 	}
 }
+
+func TestHabitNudgeComesJustBeforeTheUsualTime(t *testing.T) {
+	st := base()
+	st.FoodHabits = []HabitDue{{Key: "5|21|biryani", Title: "The Friday Biryani", Line: "6 of the last 8 Fridays.", Alt: "Biryani at Meghana for ₹300", NextAt: testNow.Add(30 * time.Minute), MonthlyPaise: rupee(1_680)}}
+	var got *Nudge
+	for _, n := range st.Rules() {
+		if n.Kind == "habit" {
+			got = &n
+		}
+	}
+	if got == nil || !strings.Contains(got.Body, "days of runway") || !strings.Contains(got.Body, "Cheaper: Biryani at Meghana") {
+		t.Fatalf("nudge %+v", got)
+	}
+	st.FoodHabits[0].NextAt = testNow.Add(3 * time.Hour)
+	for _, n := range st.Rules() {
+		if n.Kind == "habit" {
+			t.Errorf("nudged hours early: %+v", n)
+		}
+	}
+}

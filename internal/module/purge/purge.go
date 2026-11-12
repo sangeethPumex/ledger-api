@@ -20,7 +20,9 @@ type Service struct {
 	accounts *accounts.Service
 }
 
-func NewService(db *mongo.Database, a *accounts.Service) *Service { return &Service{db: db, accounts: a} }
+func NewService(db *mongo.Database, a *accounts.Service) *Service {
+	return &Service{db: db, accounts: a}
+}
 
 // Fold is how an account's opening moves so its balance stays the same. Paise.
 type Fold struct {

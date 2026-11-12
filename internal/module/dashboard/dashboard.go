@@ -192,33 +192,33 @@ func ParsePeriod(key, from, to string, now time.Time) (Range, error) {
 type Tone string
 
 type Upcoming struct {
-	SalaryPaise    int64    `json:"salaryPaise"`
-	SalaryDay      int      `json:"salaryDay"`
-	DaysToSalary   int      `json:"daysToSalary"`
-	EmiMonthly     int64    `json:"emiMonthlyPaise"`
-	EmiOutstanding int64    `json:"emiOutstandingPaise"`
-	EmiActive      int      `json:"emiActive"`
-	EmiShare       float64  `json:"emiShare"` // of salary
-	EmiTone        Tone     `json:"emiTone"`
-	NextEmi        *Next    `json:"nextEmi,omitempty"`
-	SipMonthly     int64    `json:"sipMonthlyPaise"`
-	NextSip        *Next    `json:"nextSip,omitempty"`
-	MonthlyNet     int64    `json:"monthlyNetPaise"`
-	MonthlyBurn    int64    `json:"monthlyBurnPaise"` // net outflow per month when negative, else 0
-	RunwayDays     *int     `json:"runwayDays,omitempty"`
-	RunwayTone     Tone     `json:"runwayTone"`
+	SalaryPaise    int64   `json:"salaryPaise"`
+	SalaryDay      int     `json:"salaryDay"`
+	DaysToSalary   int     `json:"daysToSalary"`
+	EmiMonthly     int64   `json:"emiMonthlyPaise"`
+	EmiOutstanding int64   `json:"emiOutstandingPaise"`
+	EmiActive      int     `json:"emiActive"`
+	EmiShare       float64 `json:"emiShare"` // of salary
+	EmiTone        Tone    `json:"emiTone"`
+	NextEmi        *Next   `json:"nextEmi,omitempty"`
+	SipMonthly     int64   `json:"sipMonthlyPaise"`
+	NextSip        *Next   `json:"nextSip,omitempty"`
+	MonthlyNet     int64   `json:"monthlyNetPaise"`
+	MonthlyBurn    int64   `json:"monthlyBurnPaise"` // net outflow per month when negative, else 0
+	RunwayDays     *int    `json:"runwayDays,omitempty"`
+	RunwayTone     Tone    `json:"runwayTone"`
 	// If income stopped: spending, fixed costs and EMIs continue, SIPs pause. Cash-only vs cash plus every investment sold.
-	StopBurn        int64 `json:"stopBurnPaise"`
-	RunwayCashDays  *int  `json:"runwayCashDays,omitempty"`
-	RunwayWorthDays *int  `json:"runwayWorthDays,omitempty"`
-	DailyTarget   int64    `json:"dailyTargetPaise"`
-	TodaySpent     int64    `json:"todaySpentPaise"`
-	DailyTone      Tone     `json:"dailyTone"`
-	CommittedDue   int64    `json:"committedDuePaise"` // EMIs and SIPs debiting before the next salary
-	BufferTarget   int64    `json:"bufferTargetPaise"`
-	BufferRatio    *float64 `json:"bufferRatio,omitempty"`
-	BufferTone     Tone     `json:"bufferTone"`
-	AvgDailySpend  int64    `json:"avgDailySpendPaise"`
+	StopBurn        int64    `json:"stopBurnPaise"`
+	RunwayCashDays  *int     `json:"runwayCashDays,omitempty"`
+	RunwayWorthDays *int     `json:"runwayWorthDays,omitempty"`
+	DailyTarget     int64    `json:"dailyTargetPaise"`
+	TodaySpent      int64    `json:"todaySpentPaise"`
+	DailyTone       Tone     `json:"dailyTone"`
+	CommittedDue    int64    `json:"committedDuePaise"` // EMIs and SIPs debiting before the next salary
+	BufferTarget    int64    `json:"bufferTargetPaise"`
+	BufferRatio     *float64 `json:"bufferRatio,omitempty"`
+	BufferTone      Tone     `json:"bufferTone"`
+	AvgDailySpend   int64    `json:"avgDailySpendPaise"`
 }
 
 type Next struct {
@@ -230,7 +230,7 @@ type Next struct {
 type upcomingIn struct {
 	Cash       int64
 	NetWorth   int64 // cash + investments
-	Profile   *profile.Profile
+	Profile    *profile.Profile
 	Emis       *emis.Summary
 	Funds      *funds.Summary
 	Last30     int64 // spend over the last 30 days

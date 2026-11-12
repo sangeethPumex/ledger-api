@@ -3,6 +3,7 @@
 package copilot
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"slices"
@@ -84,6 +85,19 @@ type State struct {
 	Wants             []Want
 	AccountsTotal     int
 	AccountsMoved     int // accounts whose balance changed in the last 30 days
+	FoodHabits        []HabitDue
+}
+
+// HabitDue is a food-order habit whose usual time is close, from the grocery module. Line is its one-line summary; Alt a cheaper option, if one was found.
+type HabitDue struct {
+	Key, Title, Line, Alt string
+	NextAt                time.Time
+	MonthlyPaise          int64
+}
+
+// HabitSource lists the habits due soon. The grocery module provides it; nil when Swiggy is not in use.
+type HabitSource interface {
+	Due(ctx context.Context, now time.Time) ([]HabitDue, error)
 }
 
 type TopTxn struct {

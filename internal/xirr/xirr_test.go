@@ -24,7 +24,7 @@ func TestRate(t *testing.T) {
 		t.Fatalf("excel: got %v", r)
 	}
 	for name, fl := range map[string][]Flow{
-		"one sign": {{d(2025, 1, 1), -1000}, {d(2026, 1, 1), -5}},
+		"one sign":  {{d(2025, 1, 1), -1000}, {d(2026, 1, 1), -5}},
 		"too short": {{d(2025, 1, 1), -1000}, {d(2025, 1, 8), 1010}},
 	} {
 		if _, ok := Rate(fl); ok {

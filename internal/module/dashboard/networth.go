@@ -10,8 +10,8 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
-	"ledger-backend/internal/module/copilot"
 	"ledger-backend/internal/ist"
+	"ledger-backend/internal/module/copilot"
 	"ledger-backend/internal/module/snapshots"
 )
 

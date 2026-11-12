@@ -104,6 +104,7 @@ type Service struct {
 	insights *insights.Service
 	snaps    *snapshots.Service
 	push     *brainjogger.Service
+	habits   HabitSource
 
 	flight singleflight.Group
 	mu     sync.Mutex
@@ -125,6 +126,9 @@ func NewService(ctx context.Context, db *mongo.Database, a *accounts.Service, c 
 	})
 	return s, err
 }
+
+// UseHabits lets the rules nudge before a food-order habit. Call it once, before the first Tick.
+func (s *Service) UseHabits(h HabitSource) { s.habits = h }
 
 // SetMode changes how hard the money has to last, for every number the app shows.
 func (s *Service) SetMode(ctx context.Context, key string) error {
@@ -236,6 +240,13 @@ func (s *Service) gather(ctx context.Context, now time.Time) (*State, error) {
 	})
 	if err := g.Wait(); err != nil {
 		return nil, err
+	}
+	// Food habits are optional like the vendor scan: a failure here must not take safe-to-spend down.
+	if s.habits != nil {
+		var err error
+		if st.FoodHabits, err = s.habits.Due(ctx, now); err != nil {
+			log.Printf("copilot: food habits: %v", err)
+		}
 	}
 
 	st.AccountsTotal = len(accs)

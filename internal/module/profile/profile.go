@@ -47,7 +47,7 @@ type Profile struct {
 	Goals        string    `json:"goals" bson:"goals"`
 	Prior        Prior     `json:"prior" bson:"prior"`
 	Memory       []string  `json:"memory" bson:"memory,omitempty"` // goals and preferences the AI noted from chats; changed only by Remember/Forget
-	UpdatedAt   time.Time `json:"updatedAt" bson:"updatedAt"`
+	UpdatedAt    time.Time `json:"updatedAt" bson:"updatedAt"`
 }
 
 func neg(v ...float64) bool {

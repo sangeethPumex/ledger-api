@@ -128,7 +128,9 @@ func (s *Service) toolCompareMonths(ctx context.Context, a, b string) (any, erro
 			}
 		}
 	}
-	sort.Slice(rows, func(i, j int) bool { return abs(rows[i]["changeRupees"].(float64)) > abs(rows[j]["changeRupees"].(float64)) })
+	sort.Slice(rows, func(i, j int) bool {
+		return abs(rows[i]["changeRupees"].(float64)) > abs(rows[j]["changeRupees"].(float64))
+	})
 	return map[string]any{"totals": map[string]any{a: rupees(res[0].total), b: rupees(res[1].total), "changeRupees": rupees(res[1].total - res[0].total)}, "categories": rows}, nil
 }
 
@@ -210,7 +212,7 @@ func (s *Service) toolTransactions(ctx context.Context, vendor, from, to string,
 func (s *Service) runTool(ctx context.Context, tc nim.ToolCall, now time.Time) string {
 	var a struct {
 		Month, MonthA, MonthB, Vendor, From, To, Fact, Date string
-		Limit                                          int
+		Limit                                               int
 	}
 	var args map[string]any
 	if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {

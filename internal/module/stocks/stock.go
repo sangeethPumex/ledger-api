@@ -22,15 +22,15 @@ const (
 
 // Quote is a symbol's last known price and previous close, in the symbol's own currency (rupees for .NS/.BO).
 type Quote struct {
-	Symbol    string    `bson:"_id"`
-	Name      string    `bson:"name"` // company name; cached with the quote, not part of the holding
+	Symbol string `bson:"_id"`
+	Name   string `bson:"name"` // company name; cached with the quote, not part of the holding
 	// Domain is the company website's host (ril.com), used to look up a logo. DomainTried is set once Yahoo was asked,
 	// so a symbol without a website is not re-asked on every refresh.
-	Domain      string `bson:"domain,omitempty"`
-	DomainTried bool   `bson:"domainTried,omitempty"`
-	Price     float64   `bson:"price"`
-	PrevClose float64   `bson:"prevClose"`
-	FetchedAt time.Time `bson:"fetchedAt"`
+	Domain      string    `bson:"domain,omitempty"`
+	DomainTried bool      `bson:"domainTried,omitempty"`
+	Price       float64   `bson:"price"`
+	PrevClose   float64   `bson:"prevClose"`
+	FetchedAt   time.Time `bson:"fetchedAt"`
 }
 
 // PriceProvider returns quotes for the symbols it could price; a missing symbol is simply absent from the map.
@@ -45,7 +45,7 @@ type Lot struct {
 	Symbol   string        `json:"symbol" bson:"symbol"` // Yahoo form: RELIANCE.NS, TCS.BO
 	Quantity float64       `json:"quantity" bson:"quantity"`
 	BuyPrice float64       `json:"buyPrice" bson:"buyPrice"`
-	BuyDate  string        `json:"buyDate" bson:"buyDate"` // YYYY-MM-DD
+	BuyDate  string        `json:"buyDate" bson:"buyDate"`                       // YYYY-MM-DD
 	Platform string        `json:"platform,omitempty" bson:"platform,omitempty"` // broker it was bought on: Groww, Motilal Oswal, Geojit...
 }
 

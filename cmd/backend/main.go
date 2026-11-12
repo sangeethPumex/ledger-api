@@ -24,6 +24,7 @@ import (
 	"ledger-backend/internal/module/debts"
 	"ledger-backend/internal/module/emis"
 	"ledger-backend/internal/module/funds"
+	pantry "ledger-backend/internal/module/grocery-pantry-tracker"
 	"ledger-backend/internal/module/insights"
 	"ledger-backend/internal/module/mandates"
 	"ledger-backend/internal/module/portfolio"
@@ -54,7 +55,7 @@ func check(err error) {
 }
 
 func main() {
-	_ = godotenv.Load(".env") // real env vars win; missing file is fine
+	_ = godotenv.Load(".env")        // real env vars win; missing file is fine
 	model := mustEnv("GEMINI_MODEL") // gemini-3.1-flash-lite: 15 requests/min, 500/day, 250K tokens/min on the free tier
 	port := mustEnv("PORT")
 	// One budget for connecting every user's cluster and building their services (index creation); slow Atlas links need more than 10s.
@@ -205,6 +206,14 @@ func build(ctx context.Context, db *mongo.Database, u user, chatLLM *nim.Client,
 	snapshots.RegisterRoutes(mux, snapshots.NewController(snapSvc), auth)
 	vehicles.RegisterRoutes(mux, vehicles.NewController(vehSvc), auth)
 	purge.RegisterRoutes(mux, purge.NewController(purge.NewService(db, accSvc)), auth)
+	// Grocery & Pantry Tracker. Swiggy sends the browser back to the frontend's callback page after sign-in (exact match, https or localhost).
+	swiggyRedirect := os.Getenv("SWIGGY_REDIRECT_URI")
+	if swiggyRedirect == "" {
+		swiggyRedirect = "http://localhost:3000/grocery/callback"
+	}
+	habSvc, err := pantry.Register(ctx, mux, db, swiggyRedirect, auth, chatLLM)
+	check(err)
+	copSvc.UseHabits(habSvc) // the food-habit nudge reads what the grocery module found
 
 	return mux
 }

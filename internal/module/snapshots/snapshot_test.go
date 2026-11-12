@@ -55,8 +55,8 @@ func TestHoldingsAt(t *testing.T) {
 	}
 
 	fs := []funds.Fund{
-		{Invested: 1000},                                       // no join date: always held
-		{Invested: 500, JoinedAt: "2026-10-10"},                // joins later
+		{Invested: 1000},                                          // no join date: always held
+		{Invested: 500, JoinedAt: "2026-10-10"},                   // joins later
 		{Invested: 200, Status: "exited", ExitedAt: "2026-10-15"}, // gone from the 15th
 	}
 	if h := FundsAt(fs, "2026-10-09"); h.Invested != 120000 { // 1000 + 200
