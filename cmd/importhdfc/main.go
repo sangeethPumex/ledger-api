@@ -25,10 +25,10 @@ import (
 	"ledger-backend/internal/module/vendors"
 )
 
-const (
-	bank  = "HDFC Bank"
-	last4 = "5963"
-)
+const bank = "HDFC Bank"
+
+// last4 is the account's last four digits; -last4 changes it. Rows are recorded under that account.
+var last4 = "5963"
 
 var (
 	ist     = time.FixedZone("IST", 5*3600+1800)
@@ -61,7 +61,49 @@ func paise(s string) int64 {
 	return int64(f*100 + 0.5)
 }
 
-func parse(path string) []row {
+var (
+	// netTail ends a net-banking row: reference, value date, amount, closing balance. The narration before it is optional, since it can wrap onto earlier lines.
+	netTail  = regexp.MustCompile(`^(?:(.*?)\s+)?(\S{6,20})\s+\d{2}/\d{2}/\d{2}\s+(-?[\d,]+\.\d\d)\s+([\d,]+\.\d\d)\s*$`)
+	netStart = regexp.MustCompile(`^(\d{2}/\d{2}/\d{2}) (.*)$`)
+)
+
+// netRows reads the net-banking PDF (`pdftotext -raw`): a narration can wrap above or below the line with the amounts, and every page carries an address block
+// (from "Page No" to the registered office line) that is skipped. Narration before the amounts wraps at a space, after them mid-word.
+func netRows(body string) (rows []row, narr [][]string) {
+	junk, have := false, false
+	for _, l := range strings.Split(body, "\n") {
+		l = strings.TrimSpace(l)
+		switch {
+		case strings.Contains(l, "STATEMENT SUMMARY"):
+			return
+		case strings.HasPrefix(l, "Page No"):
+			junk = true
+			continue
+		case junk:
+			junk = !strings.HasPrefix(l, "Registered Office Address")
+			continue
+		case l == "" || strings.HasPrefix(l, "Date ") && strings.Contains(l, "Narration"):
+			continue
+		}
+		if m := netStart.FindStringSubmatch(l); m != nil {
+			d, _ := time.ParseInLocation("02/01/06", m[1], ist)
+			rows, narr, have, l = append(rows, row{date: d}), append(narr, nil), false, m[2]
+		} else if len(rows) == 0 {
+			continue
+		}
+		i := len(rows) - 1
+		if t := netTail.FindStringSubmatch(l); t != nil && !have {
+			rows[i].ref, rows[i].paise, rows[i].balance, have = t[2], paise(t[3]), paise(t[4]), true
+			l = t[1]
+		} else if !have {
+			l += " "
+		}
+		narr[i] = append(narr[i], l)
+	}
+	return
+}
+
+func parse(path string, net bool) []row {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		log.Fatal(err)
@@ -74,7 +116,18 @@ func parse(path string) []row {
 	prev := paise(om[1])
 	var rows []row
 	var narr [][]string
+	if net {
+		rows, narr = netRows(body)
+		for i, r := range rows {
+			if r.ref == "" {
+				log.Fatalf("row %d of %s has no amount line: %q", i+1, r.date.Format("02-01"), narr[i])
+			}
+		}
+	}
 	for _, l := range strings.Split(body, "\n") {
+		if net {
+			break
+		}
 		if strings.Contains(l, "STATEMENT SUMMARY") {
 			break
 		}
@@ -149,11 +202,18 @@ func classify(r *row) {
 func main() {
 	apply := flag.Bool("apply", false, "write to the database (default: dry run)")
 	del := flag.Bool("delete", false, "with -apply, also delete recorded rows the statement does not have")
+	user := flag.String("user", "SANGEETH", "whose database: the prefix of the *_MONGODB_URI / *_MONGODB_DB variables")
+	flag.StringVar(&last4, "last4", last4, "last four digits of the account")
+	self := flag.String("self", "", "regexp for the holder's own name in UPI narrations (those rows are transfers); default: Sangeeth Promod")
+	net := flag.Bool("net", false, "statement is the net-banking PDF layout, not the one from the app")
 	flag.Parse()
 	if flag.NArg() != 1 {
-		log.Fatal("usage: importhdfc [-apply [-delete]] statement.txt")
+		log.Fatal("usage: importhdfc [-user SILPA -last4 9991 -self 'SILPA S' -net] [-apply [-delete]] statement.txt")
 	}
-	rows := parse(flag.Arg(0))
+	if *self != "" {
+		selfRe = regexp.MustCompile("(?i)" + *self)
+	}
+	rows := parse(flag.Arg(0), *net)
 	var dr, cr, dn, cn int64
 	for _, r := range rows {
 		if r.credit {
@@ -165,13 +225,13 @@ func main() {
 	fmt.Printf("parsed %d rows: debits %.2f (%d), credits %.2f (%d)\n", len(rows), float64(dr)/100, dn, float64(cr)/100, cn)
 
 	_ = godotenv.Load(".env")
-	client, err := mongo.Connect(options.Client().ApplyURI(os.Getenv("SANGEETH_MONGODB_URI")))
+	client, err := mongo.Connect(options.Client().ApplyURI(os.Getenv(strings.ToUpper(*user) + "_MONGODB_URI")))
 	if err != nil {
 		log.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	db := client.Database(os.Getenv("SANGEETH_MONGODB_DB"))
+	db := client.Database(os.Getenv(strings.ToUpper(*user) + "_MONGODB_DB"))
 	txCol, rawCol := db.Collection(transactions.Collection), db.Collection(raw_transactions.Collection)
 
 	vSvc, err := vendors.NewService(ctx, db)

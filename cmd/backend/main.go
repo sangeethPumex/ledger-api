@@ -126,6 +126,9 @@ func build(ctx context.Context, db *mongo.Database, u user, chatLLM *nim.Client,
 	vendSvc.OnChange = txSvc.Resync
 	emiSvc, err := emis.NewService(ctx, db)
 	check(err)
+	if u.Name == "sangeeth" { // the car-loan statement is his; no one else's database gets it
+		check(emiSvc.SeedCarLoan(ctx))
+	}
 	fundSvc, err := funds.NewService(ctx, db)
 	check(err)
 	stockSvc := stocks.NewService(db, stocks.NewYahoo(yahooURL))

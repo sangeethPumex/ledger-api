@@ -22,9 +22,10 @@ var carLedger = []Period{
 	{"2026-09-23", "2026-10-22", 4467, 11578, 150, 7261, 687315},
 }
 
-// seedCarLoan loads the statement above once, onto an existing loan with "car" in its name or a new one. Never runs again once a loan has a ledger.
+// SeedCarLoan loads the statement above once, onto an existing loan with "car" in its name or a new one. Never runs again once a loan has a ledger.
+// It is Sangeeth's own loan, so only his database may call it: seeding it for every user put it in Silpa's.
 // ponytail: tenure (84) is worked out from the amount and 7.70%; confirm it with the lender.
-func (s *Service) seedCarLoan(ctx context.Context) error {
+func (s *Service) SeedCarLoan(ctx context.Context) error {
 	var e Emi
 	err := s.col.FindOne(ctx, bson.M{"kind": "loan", "name": bson.M{"$regex": "car|kia|sonet", "$options": "i"}}).Decode(&e)
 	switch {

@@ -28,7 +28,7 @@ func NewService(ctx context.Context, db *mongo.Database) (*Service, error) {
 	if err := legacy.StringIDs(ctx, col); err != nil {
 		return s, err
 	}
-	return s, s.seedCarLoan(ctx)
+	return s, nil
 }
 
 func (s *Service) get(ctx context.Context, id bson.ObjectID) (*Emi, error) {
