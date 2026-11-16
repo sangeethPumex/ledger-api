@@ -23,8 +23,8 @@ type Client struct {
 	next            time.Time // earliest start of the next Chat call
 }
 
-// minGap keeps Chat under Gemini's 15 requests/minute free quota.
-const minGap = 4100 * time.Millisecond
+// minGap queues Chat calls at 10 requests/minute, leaving headroom under Gemini's 15/minute free quota for dashboard chat.
+const minGap = 6 * time.Second
 
 // pace blocks until this call's slot; calls are spaced minGap apart.
 func (c *Client) pace(ctx context.Context) error {
