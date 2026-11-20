@@ -9,6 +9,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"golang.org/x/sync/errgroup"
 
 	"ledger-backend/internal/ist"
 	"ledger-backend/internal/module/copilot"
@@ -138,27 +139,40 @@ func project(from NWPoint, u Upcoming, now time.Time, months int) []Scenario {
 }
 
 // NetWorth is the recorded month-end history over the last `months` months plus three projection scenarios for the next three.
+// The dashboard, the month rows and the daily snapshots are independent reads, so they run together.
 func (s *Service) NetWorth(ctx context.Context, months int, now time.Time) (*NetWorthResponse, error) {
 	r, err := ParsePeriod("month", "", "", now)
 	if err != nil {
 		return nil, err
 	}
-	d, err := s.Get(ctx, r, "month", now) // also records this month's row
-	if err != nil {
-		return nil, err
-	}
 	t := now.In(ist.Loc)
 	start := time.Date(t.Year(), t.Month()-time.Month(months), 1, 0, 0, 0, 0, ist.Loc).Format("2006-01")
-	cur, err := s.months.Find(ctx, bson.M{"_id": bson.M{"$gte": start}}, options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}))
-	if err != nil {
+	var (
+		d       *Response
+		docs    []monthDoc
+		daily   []NWPoint
+		g, gctx = errgroup.WithContext(ctx)
+	)
+	g.Go(func() (err error) { d, err = s.Get(gctx, r, "month", now); return }) // also records this month's row
+	g.Go(func() error {
+		cur, err := s.months.Find(gctx, bson.M{"_id": bson.M{"$gte": start}}, options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}))
+		if err != nil {
+			return err
+		}
+		return cur.All(gctx, &docs)
+	})
+	g.Go(func() error { daily = s.dailyPoints(gctx, start+"-01", t.Format("2006-01-02")); return nil })
+	if err := g.Wait(); err != nil {
 		return nil, err
 	}
-	var docs []monthDoc
-	if err := cur.All(ctx, &docs); err != nil {
-		return nil, err
+	// The month row was read while Get was still writing it, so put in memory what Get wrote (see record).
+	cur := monthDoc{ID: t.Format("2006-01"), Date: t.Format("2006-01-02"), NetWorth: d.Position.NetWorth, Owed: ptr(d.Position.Liabilities), Cash: ptr(d.Position.Cash), Investments: ptr(d.Position.Current)}
+	if n := len(docs); n > 0 && docs[n-1].ID == cur.ID {
+		docs[n-1] = cur
+	} else {
+		docs = append(docs, cur)
 	}
 	hist := make([]NWPoint, 0, len(docs))
-	daily := s.dailyPoints(ctx, start+"-01", t.Format("2006-01-02"))
 	for _, m := range docs {
 		if len(daily) > 0 && m.Date >= daily[0].Date {
 			break // the daily rows take over from the first day they cover

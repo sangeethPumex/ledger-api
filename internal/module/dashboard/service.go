@@ -10,6 +10,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"golang.org/x/sync/errgroup"
 
 	"ledger-backend/internal/ist"
 	"ledger-backend/internal/module/accounts"
@@ -219,12 +220,14 @@ func (s *Service) cardPayments(ctx context.Context, from, to time.Time, n names)
 type names struct{ acc, card map[bson.ObjectID]string }
 
 func (s *Service) names(ctx context.Context) (names, []accounts.View, error) {
-	accs, err := s.accounts.List(ctx)
-	if err != nil {
-		return names{}, nil, err
-	}
-	cs, err := s.cards.List(ctx)
-	if err != nil {
+	var (
+		accs    []accounts.View
+		cs      []cards.Card
+		g, gctx = errgroup.WithContext(ctx)
+	)
+	g.Go(func() (err error) { accs, err = s.accounts.List(gctx); return })
+	g.Go(func() (err error) { cs, err = s.cards.List(gctx); return })
+	if err := g.Wait(); err != nil {
 		return names{}, nil, err
 	}
 	n := names{acc: map[bson.ObjectID]string{}, card: map[bson.ObjectID]string{}}
@@ -402,29 +405,9 @@ func (s *Service) owedToYou(ctx context.Context) (int64, error) {
 }
 
 // Get builds the whole dashboard for a period. It also nudges a background NAV refresh so fund values are fresh next time.
+// Every read below depends only on the request, so they run concurrently: the page costs the slowest query, not the sum of them.
 func (s *Service) Get(ctx context.Context, r Range, key string, now time.Time) (*Response, error) {
 	s.funds.RefreshIfStale()
-	n, accs, err := s.names(ctx)
-	if err != nil {
-		return nil, err
-	}
-	prof, err := s.profile.Get(ctx)
-	if err != nil {
-		return nil, err
-	}
-	emiSum, err := s.emis.Summary(ctx, now)
-	if err != nil {
-		return nil, err
-	}
-	fundSum, err := s.funds.Summary(ctx, now)
-	if err != nil {
-		return nil, err
-	}
-
-	flowDocs, periodDays, err := s.aggregate(ctx, r.From, r.To)
-	if err != nil {
-		return nil, err
-	}
 	// Spend rate inputs: a window long enough for both "last 30 days" and "since the 1st".
 	today := ist.Midnight(now)
 	monthStart := time.Date(today.Year(), today.Month(), 1, 0, 0, 0, 0, ist.Loc)
@@ -432,10 +415,49 @@ func (s *Service) Get(ctx context.Context, r Range, key string, now time.Time) (
 	if monthStart.Before(since) {
 		since = monthStart
 	}
-	_, recentDays, err := s.aggregate(ctx, since, today.AddDate(0, 0, 1))
-	if err != nil {
+
+	// Each goroutine writes only its own variables; g.Wait is the barrier that makes them safe to read.
+	var (
+		n          names
+		accs       []accounts.View
+		cardPay    *Flow
+		recent     []TxnView
+		prof       *profile.Profile
+		emiSum     *emis.Summary
+		fundSum    *funds.Summary
+		port       *stocks.Portfolio
+		flowDocs   []flowDoc
+		periodDays []dayDoc
+		recentDays []dayDoc
+		owed       int64
+		plan       mandates.Plan
+		g, gctx    = errgroup.WithContext(ctx)
+	)
+	g.Go(func() (err error) {
+		if n, accs, err = s.names(gctx); err != nil {
+			return err
+		}
+		// Both only need the account and card names, so they start together once those are in.
+		g2, c2 := errgroup.WithContext(gctx)
+		g2.Go(func() (err error) { cardPay, err = s.cardPayments(c2, r.From, r.To, n); return })
+		g2.Go(func() (err error) {
+			recent, err = s.recent(c2, Range{From: today, To: today.AddDate(0, 0, 1)}, n, 50)
+			return
+		})
+		return g2.Wait()
+	})
+	g.Go(func() (err error) { prof, err = s.profile.Get(gctx); return })
+	g.Go(func() (err error) { emiSum, err = s.emis.Summary(gctx, now); return })
+	g.Go(func() (err error) { fundSum, err = s.funds.Summary(gctx, now); return })
+	g.Go(func() (err error) { port, err = s.stocks.Portfolio(gctx, now); return })
+	g.Go(func() (err error) { flowDocs, periodDays, err = s.aggregate(gctx, r.From, r.To); return })
+	g.Go(func() (err error) { _, recentDays, err = s.aggregate(gctx, since, today.AddDate(0, 0, 1)); return })
+	g.Go(func() (err error) { owed, err = s.owedToYou(gctx); return })
+	g.Go(func() (err error) { plan, err = s.mandates.Plan(gctx, now); return })
+	if err := g.Wait(); err != nil {
 		return nil, err
 	}
+
 	var last30, monthSpent, todaySpent int64
 	todayKey, monthKey, from30 := today.Format("2006-01-02"), monthStart.Format("2006-01-02"), today.AddDate(0, 0, -29).Format("2006-01-02")
 	for _, d := range recentDays {
@@ -457,9 +479,7 @@ func (s *Service) Get(ctx context.Context, r Range, key string, now time.Time) (
 	cf := buildCashflow(n.flows(flowDocs, "in"), n.flows(flowDocs, "out"), earlierIncome, earlierSpent)
 	cf.Vendors = topFlows(n.flows(flowDocs, "vendor"), 7, "Other", "spend")
 	cf.Daily = fillDays(periodDays, r, now)
-	if cf.CardPayments, err = s.cardPayments(ctx, r.From, r.To, n); err != nil {
-		return nil, err
-	}
+	cf.CardPayments = cardPay
 
 	var cash int64
 	for _, a := range accs {
@@ -470,37 +490,29 @@ func (s *Service) Get(ctx context.Context, r Range, key string, now time.Time) (
 	if pos.UsesFunds {
 		mfInvested, mfCurrent = paise(fundSum.Invested), paise(fundSum.Value)
 	}
-	port, err := s.stocks.Portfolio(ctx, now)
-	if err != nil {
-		return nil, err
-	}
 	stInvested, stCurrent := paise(port.Summary.Invested), paise(port.Summary.Value)
 	pos.Invested = mfInvested + stInvested + paise(prof.Other.Invested)
 	pos.Current = mfCurrent + stCurrent + paise(prof.Other.Current)
 	pos.Liabilities = paise(emiSum.Outstanding)
 	pos.Pnl, pos.NetWorth = pos.Current-pos.Invested, cash+pos.Current
-	if err := s.record(ctx, now, pos); err != nil {
-		log.Printf("dashboard: net-worth record: %v", err)
-	}
+
+	// Writing this month's row and reading last month's touch different documents, so they overlap. record gets its own copy of pos
+	// because the change fields below are set on the original while it may still be running.
+	var wg sync.WaitGroup
+	snap := pos
+	wg.Go(func() {
+		if err := s.record(ctx, now, snap); err != nil {
+			log.Printf("dashboard: net-worth record: %v", err)
+		}
+	})
 	if ch, since, ok, err := s.lastMonthChange(ctx, now, pos.NetWorth); err != nil {
 		log.Printf("dashboard: net-worth change: %v", err)
 	} else if ok {
 		pos.NetWorthChange, pos.ChangeSince = &ch, since
 	}
+	wg.Wait()
 	pos.Allocation = []Allocation{{"Cash", cash}, {"Mutual Funds", mfCurrent}, {"Stocks", stCurrent}, {"Other", paise(prof.Other.Current)}}
 
-	recent, err := s.recent(ctx, Range{From: today, To: today.AddDate(0, 0, 1)}, n, 50)
-	if err != nil {
-		return nil, err
-	}
-	owed, err := s.owedToYou(ctx)
-	if err != nil {
-		return nil, err
-	}
-	plan, err := s.mandates.Plan(ctx, now)
-	if err != nil {
-		return nil, err
-	}
 	m := Mandates{Next30: plan.Next30, Next90: plan.Next90, SetAside: plan.SetAside, Due: []mandates.Occ{}}
 	for _, o := range plan.Calendar {
 		if o.Days < 90 {

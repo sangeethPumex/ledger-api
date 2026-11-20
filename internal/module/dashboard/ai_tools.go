@@ -10,6 +10,7 @@ import (
 
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
+	"golang.org/x/sync/errgroup"
 
 	"ledger-backend/internal/ist"
 	"ledger-backend/internal/nim"
@@ -110,14 +111,19 @@ func (s *Service) toolCompareMonths(ctx context.Context, a, b string) (any, erro
 		paise map[string]int64
 		total int64
 	}
+	var ranges [2]Range
 	for i, m := range []string{a, b} {
-		r, err := monthRange(m)
-		if err != nil {
+		var err error
+		if ranges[i], err = monthRange(m); err != nil { // validate both before any query starts
 			return nil, err
 		}
-		if res[i].paise, _, res[i].total, err = s.spendByCategory(ctx, r); err != nil {
-			return nil, err
-		}
+	}
+	g, gctx := errgroup.WithContext(ctx)
+	for i := range ranges {
+		g.Go(func() (err error) { res[i].paise, _, res[i].total, err = s.spendByCategory(gctx, ranges[i]); return })
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
 	}
 	seen, rows := map[string]bool{}, []map[string]any{}
 	for _, side := range res {
