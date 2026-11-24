@@ -83,6 +83,7 @@ A person is switched on when `<NAME>_SECRET` is set. Today the names are `SANGEE
 | Variable | Required | Meaning |
 |---|---|---|
 | `PORT` | yes | HTTP port (the Dockerfile exposes 8081) |
+| `KRUTRIM_API_KEY` | no | parse messages with Krutrim (OpenAI-style) instead of Gemini; `KRUTRIM_MODEL` (default `Meta-Llama-3.3-70B-Instruct`) and `KRUTRIM_MIN_GAP_SECONDS` (default 6) tune it |
 | `GEMINI_API_KEY`, `GEMINI_MODEL` | yes | LLM used to parse messages into transactions and for dashboard chat |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | for push | Generate with `go run ./cmd/vapidgen` |
 | `S3_BUCKET`, `AWS_REGION` | for uploads | Without a bucket, file uploads answer 503 |

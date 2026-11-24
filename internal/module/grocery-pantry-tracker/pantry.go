@@ -15,6 +15,7 @@ import (
 
 	"ledger-backend/internal/module/grocery-pantry-tracker/basket"
 	"ledger-backend/internal/module/grocery-pantry-tracker/habits"
+	"ledger-backend/internal/module/grocery-pantry-tracker/healthmenu"
 	"ledger-backend/internal/module/grocery-pantry-tracker/linker"
 	"ledger-backend/internal/module/grocery-pantry-tracker/orders"
 	"ledger-backend/internal/module/grocery-pantry-tracker/swiggy"
@@ -43,6 +44,7 @@ func Register(ctx context.Context, mux *http.ServeMux, db *mongo.Database, redir
 	go habSvc.Run(context.Background(), 6*time.Hour)
 	go basSvc.Run(context.Background(), 6*time.Hour)
 
+	healthmenu.RegisterRoutes(mux, healthmenu.NewController(healthmenu.NewService(client, ordSvc, llm)), auth)
 	swiggy.RegisterRoutes(mux, swiggy.NewController(link), auth)
 	orders.RegisterRoutes(mux, orders.NewController(ordSvc), auth)
 	habits.RegisterRoutes(mux, habits.NewController(habSvc), auth)

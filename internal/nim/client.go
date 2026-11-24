@@ -20,11 +20,12 @@ type Client struct {
 	URL, Key, Model string
 	HTTP            *http.Client
 	mu              sync.Mutex
-	next            time.Time // earliest start of the next Chat call
+	MinGap          time.Duration // spacing between Chat calls; 0 means defaultGap
+	next            time.Time     // earliest start of the next Chat call
 }
 
-// minGap queues Chat calls at 10 requests/minute, leaving headroom under Gemini's 15/minute free quota for dashboard chat.
-const minGap = 6 * time.Second
+// defaultGap queues Chat calls at 10 requests/minute, under typical free-tier limits.
+const defaultGap = 6 * time.Second
 
 // pace blocks until this call's slot; calls are spaced minGap apart.
 func (c *Client) pace(ctx context.Context) error {
@@ -33,7 +34,11 @@ func (c *Client) pace(ctx context.Context) error {
 	if now := time.Now(); at.Before(now) {
 		at = now
 	}
-	c.next = at.Add(minGap)
+	gap := c.MinGap
+	if gap <= 0 {
+		gap = defaultGap
+	}
+	c.next = at.Add(gap)
 	c.mu.Unlock()
 	select {
 	case <-time.After(time.Until(at)):

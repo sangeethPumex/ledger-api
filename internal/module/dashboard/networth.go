@@ -180,11 +180,15 @@ func (s *Service) NetWorth(ctx context.Context, months int, now time.Time) (*Net
 		hist = append(hist, NWPoint{Date: m.Date, NetWorth: m.NetWorth, Owed: m.Owed, Cash: m.Cash, Investments: m.Investments})
 	}
 	hist = append(hist, daily...)
+	now0 := newPoint(t.Format("2006-01-02"), d.Position.Cash, d.Position.Current, d.Position.Liabilities)
+	// Today's snapshot is rewritten only every 15 minutes; the live figures just computed are fresher, so an edit shows at once.
+	if n := len(hist); n > 0 && hist[n-1].Date == now0.Date {
+		hist[n-1] = now0
+	}
 	setChanges(hist, 0)
 	if len(hist) > 0 {
 		hist[0].Change = 0
 	}
-	now0 := newPoint(t.Format("2006-01-02"), d.Position.Cash, d.Position.Current, d.Position.Liabilities)
 	return &NetWorthResponse{History: hist, Scenarios: project(now0, d.Upcoming, now, 3), Method: projectionMethod}, nil
 }
 
