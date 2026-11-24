@@ -228,7 +228,7 @@ func build(ctx context.Context, db *mongo.Database, u user, chatLLM, parseLLM *n
 	// Grocery & Pantry Tracker. Swiggy sends the browser back to the frontend's callback page after sign-in (exact match, https or localhost).
 	swiggyRedirect := os.Getenv("SWIGGY_REDIRECT_URI")
 	if swiggyRedirect == "" {
-		swiggyRedirect = "http://localhost:3000/grocery/callback"
+		swiggyRedirect = "http://localhost/callback"
 	}
 	habSvc, err := pantry.Register(ctx, mux, db, swiggyRedirect, auth, chatLLM, txSvc, catSvc)
 	check(err)

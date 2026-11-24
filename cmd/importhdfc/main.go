@@ -25,7 +25,8 @@ import (
 	"ledger-backend/internal/module/vendors"
 )
 
-const bank = "HDFC Bank"
+// bank is the account's bank as recorded on its transactions; -bank changes it (the statement text is first put in the HDFC layout).
+var bank = "HDFC Bank"
 
 // last4 is the account's last four digits; -last4 changes it. Rows are recorded under that account.
 var last4 = "5963"
@@ -203,6 +204,7 @@ func main() {
 	apply := flag.Bool("apply", false, "write to the database (default: dry run)")
 	del := flag.Bool("delete", false, "with -apply, also delete recorded rows the statement does not have")
 	user := flag.String("user", "SANGEETH", "whose database: the prefix of the *_MONGODB_URI / *_MONGODB_DB variables")
+	flag.StringVar(&bank, "bank", bank, "bank name as recorded on the account, e.g. \"Federal Bank\"")
 	flag.StringVar(&last4, "last4", last4, "last four digits of the account")
 	self := flag.String("self", "", "regexp for the holder's own name in UPI narrations (those rows are transfers); default: Sangeeth Promod")
 	net := flag.Bool("net", false, "statement is the net-banking PDF layout, not the one from the app")
@@ -287,7 +289,7 @@ func main() {
 		}
 		dir := dirOf(r.credit)
 		label := fmt.Sprintf("%s %-8s %9.2f %-6s %-28.28s %s", r.date.Format("02-01"), r.typ, float64(r.paise)/100, dir, r.name, r.ref)
-		msg := fmt.Sprintf("HDFC STATEMENT %s %s %.2f %s", r.date.Format("02-01-2006"), r.text, float64(r.paise)/100, dir)
+		msg := fmt.Sprintf(strings.ToUpper(strings.TrimSuffix(bank, " Bank"))+" STATEMENT %s %s %.2f %s", r.date.Format("02-01-2006"), r.text, float64(r.paise)/100, dir)
 		if n, _ := rawCol.CountDocuments(ctx, bson.M{"message": msg}); n > 0 {
 			fmt.Println("skip (already imported)", label)
 			continue
