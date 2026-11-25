@@ -1,8 +1,5 @@
-.git
-.github
-.env
-.env.*
+.env*
+!.env.example
+*.exe
 tmp
-.air.toml
-README.md
-**/*_test.go
+.git

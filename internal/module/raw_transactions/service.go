@@ -97,10 +97,10 @@ func (s *Service) WatchInserts(ctx context.Context, onInsert func()) {
 // KeepFor is how long a raw message is kept; the parsed transaction outlives it.
 const KeepFor = 5 * 24 * time.Hour
 
-// Sweep deletes messages older than KeepFor every interval, until ctx ends. Pending ones are kept: they are not parsed yet.
+// Sweep deletes messages older than KeepFor every interval, until ctx ends. Pending and failed ones are kept: they are not parsed yet.
 func (s *Service) Sweep(ctx context.Context, interval time.Duration) {
 	for {
-		r, err := s.col.DeleteMany(ctx, bson.M{"received_at": bson.M{"$lt": time.Now().Add(-KeepFor)}, "status": bson.M{"$ne": StatusPending}})
+		r, err := s.col.DeleteMany(ctx, bson.M{"received_at": bson.M{"$lt": time.Now().Add(-KeepFor)}, "status": bson.M{"$nin": bson.A{StatusPending, StatusFailed}}})
 		if err != nil {
 			log.Printf("raw sweep: %v", err)
 		} else if r.DeletedCount > 0 {
@@ -123,6 +123,16 @@ func (s *Service) Delete(ctx context.Context, id bson.ObjectID) error {
 // RetryFailed puts every failed message back in the queue; called once at startup.
 func (s *Service) RetryFailed(ctx context.Context) (int64, error) {
 	r, err := s.col.UpdateMany(ctx, bson.M{"status": StatusFailed},
+		bson.M{"$set": bson.M{"status": StatusPending}, "$unset": bson.M{"fail_reason": ""}})
+	if err != nil {
+		return 0, err
+	}
+	return r.ModifiedCount, nil
+}
+
+// RetryTransient requeues messages that failed for a reason a retry can fix (LLM or DB hiccup), not bad extractions.
+func (s *Service) RetryTransient(ctx context.Context) (int64, error) {
+	r, err := s.col.UpdateMany(ctx, bson.M{"status": StatusFailed, "fail_reason": bson.M{"$in": bson.A{"llm_error", "db_error"}}},
 		bson.M{"$set": bson.M{"status": StatusPending}, "$unset": bson.M{"fail_reason": ""}})
 	if err != nil {
 		return 0, err

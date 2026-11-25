@@ -78,6 +78,13 @@ func (s *statement) reconcile() error {
 	return nil
 }
 
+func envOr(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
+}
+
 func main() {
 	apply := flag.Bool("apply", false, "write to the database (default: dry run)")
 	flag.Parse()
@@ -94,11 +101,11 @@ func main() {
 	fmt.Printf("statement reconciles: %d rows, total due %.2f\n", len(st.Rows), float64(st.RawTotals.TotalDue)/100)
 
 	_ = godotenv.Load(".env")
-	client, err := mongo.Connect(options.Client().ApplyURI(os.Getenv("SANGEETH_MONGODB_URI")))
+	client, err := mongo.Connect(options.Client().ApplyURI(os.Getenv(envOr("IMPORT_USER", "ME") + "_MONGODB_URI")))
 	check(err)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	db := client.Database(os.Getenv("SANGEETH_MONGODB_DB"))
+	db := client.Database(os.Getenv(envOr("IMPORT_USER", "ME") + "_MONGODB_DB"))
 	txCol, rawCol := db.Collection(transactions.Collection), db.Collection(raw_transactions.Collection)
 
 	cSvc, err := cards.NewService(ctx, db)

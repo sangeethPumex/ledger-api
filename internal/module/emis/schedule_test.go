@@ -5,13 +5,26 @@ import (
 	"time"
 )
 
+// carLedger is a sample loan statement, 23 Jan to 22 Oct 2026, used as a test fixture.
+var carLedger = []Period{
+	{"2026-01-23", "2026-02-22", 4905, 11578, 0, 6673, 743327},
+	{"2026-02-23", "2026-03-22", 4391, 11578, 0, 7187, 736140},
+	{"2026-03-23", "2026-04-22", 4814, 11578, 0, 6764, 729376},
+	{"2026-04-23", "2026-05-22", 4615, 10578, 1000, 6963, 722413},
+	{"2026-05-23", "2026-06-22", 4724, 11578, 0, 6854, 715559},
+	{"2026-06-23", "2026-07-22", 4529, 11578, 0, 7049, 708510},
+	{"2026-07-23", "2026-08-22", 4633, 11578, 0, 6945, 701565},
+	{"2026-08-23", "2026-09-22", 4589, 11578, 0, 6989, 694576},
+	{"2026-09-23", "2026-10-22", 4467, 11578, 150, 7261, 687315},
+}
+
 func carLoan() *Emi {
 	rate, bal := 7.95, 687315.0
 	return &Emi{Kind: "loan", Amount: 11578, DueDay: 23, Rate: &rate, Balance: &bal, RateType: "variable", Ledger: carLedger,
 		Rates: []RateChange{{Rate: 7.70}, {From: "2026-09-23", Rate: 7.95}}}
 }
 
-// The seeded statement must agree with itself and with the totals the lender printed.
+// The sample statement must agree with itself and with the totals the lender printed.
 func TestCarLedgerAddsUp(t *testing.T) {
 	var tot Totals
 	bal := 750000.0

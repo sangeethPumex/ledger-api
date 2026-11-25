@@ -253,13 +253,20 @@ func (s *Service) Page(ctx context.Context, f Filter, page int64) (items []Trans
 // ParsePending parses every message ledger-api has stored as pending.
 // Failed messages are not retried here, to avoid looping LLM spend; use the reparse route.
 func (s *Service) ParsePending(ctx context.Context) {
-	ids, err := s.raw.Pending(ctx, 20)
-	if err != nil {
-		log.Printf("poll failed: %v", err)
-		return
-	}
-	for _, id := range ids {
-		_ = s.Parse(ctx, id)
+	var prev bson.ObjectID
+	for ctx.Err() == nil { // drain the whole backlog, not just the first batch
+		ids, err := s.raw.Pending(ctx, 20)
+		if err != nil {
+			log.Printf("poll failed: %v", err)
+			return
+		}
+		if len(ids) == 0 || ids[0] == prev { // same head again: it can't be parsed or failed, stop rather than spin
+			return
+		}
+		prev = ids[0]
+		for _, id := range ids {
+			_ = s.Parse(ctx, id)
+		}
 	}
 }
 

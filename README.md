@@ -68,7 +68,7 @@ Settings come from the environment, and a `.env` file in the working directory i
 
 ### Per person
 
-A person is switched on when `<NAME>_SECRET` is set. Today the names are `SANGEETH` and `SILPA`. To add someone, add their name to the list in `main.go` and set the variables below.
+The names come from `PEOPLE` (comma-separated, default `ME`). A person is switched on when `<NAME>_SECRET` is set. To add someone, add their name to `PEOPLE` and set the variables below.
 
 | Variable | Required | Meaning |
 |---|---|---|
@@ -95,17 +95,18 @@ Example `.env` (values are placeholders):
 ```env
 PORT=8081
 GEMINI_API_KEY=...
-GEMINI_MODEL=gemini-3.1-flash-lite
+GEMINI_MODEL=gemini-2.5-flash
 
-SANGEETH_SECRET=<long random string>
-SANGEETH_MONGODB_URI=mongodb+srv://<user>:<password>@<cluster>/?retryWrites=true&w=majority
-SANGEETH_MONGODB_DB=ledger
-SANGEETH_HOLDER=<NAME ON BANK ACCOUNT>
+PEOPLE=ME,PARTNER
+ME_SECRET=<long random string>
+ME_MONGODB_URI=mongodb+srv://<user>:<password>@<cluster>/?retryWrites=true&w=majority
+ME_MONGODB_DB=ledger
+ME_HOLDER=<NAME ON BANK ACCOUNT>
 
-SILPA_SECRET=<a different long random string>
-SILPA_MONGODB_URI=...
-SILPA_MONGODB_DB=ledger
-SILPA_HOLDER=...
+PARTNER_SECRET=<a different long random string>
+PARTNER_MONGODB_URI=...
+PARTNER_MONGODB_DB=ledger
+PARTNER_HOLDER=...
 ```
 
 > Never commit real keys or passwords. If a secret has been shared or committed, rotate it.

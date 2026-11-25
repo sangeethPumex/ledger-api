@@ -41,13 +41,13 @@ func TestParseExtraction(t *testing.T) {
 }
 
 func TestSystemPromptPerUser(t *testing.T) {
-	p := systemPrompt([]string{"Food"}, "SILPA X", "Her bank is ICICI.")
-	for _, want := range []string{"account holder is SILPA X", "from SILPA X on", "Her bank is ICICI."} {
+	p := systemPrompt([]string{"Food"}, "JANE DOE", "Her bank is ICICI.")
+	for _, want := range []string{"account holder is JANE DOE", "from JANE DOE on", "Her bank is ICICI."} {
 		if !strings.Contains(p, want) {
 			t.Errorf("prompt missing %q", want)
 		}
 	}
-	if strings.Contains(p, "SANGEETH") || strings.Contains(systemPrompt(nil, "A", ""), "Extra rules") {
+	if strings.Contains(p, "JOHN") || strings.Contains(systemPrompt(nil, "A", ""), "Extra rules") {
 		t.Error("owner name leaked or empty hint added a section")
 	}
 }

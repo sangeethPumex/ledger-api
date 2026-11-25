@@ -25,7 +25,6 @@ import (
 	"ledger-backend/internal/module/debts"
 	"ledger-backend/internal/module/emis"
 	"ledger-backend/internal/module/funds"
-	pantry "ledger-backend/internal/module/grocery-pantry-tracker"
 	"ledger-backend/internal/module/insights"
 	"ledger-backend/internal/module/mandates"
 	"ledger-backend/internal/module/portfolio"
@@ -40,6 +39,17 @@ import (
 	"ledger-backend/internal/module/views"
 	"ledger-backend/internal/nim"
 )
+
+// people is the list of name prefixes from PEOPLE (default "ME"), upper-cased.
+func people() []string {
+	var out []string
+	for _, n := range strings.Split(envOr("PEOPLE", "ME"), ",") {
+		if n = strings.ToUpper(strings.TrimSpace(n)); n != "" {
+			out = append(out, n)
+		}
+	}
+	return out
+}
 
 func envOr(k, def string) string {
 	if v := os.Getenv(k); v != "" {
@@ -89,15 +99,15 @@ func main() {
 	check(err)
 
 	// Every user gets their own cluster, database, services and background jobs; the API key picks which one answers.
-	// A person is on when <NAME>_SECRET is set, and then needs <NAME>_MONGODB_URI, _MONGODB_DB and _HOLDER (_PARSE_HINT is optional). Add a name here for a third person.
+	// PEOPLE is a comma-separated list of names (default ME). A person is on when <NAME>_SECRET is set, and then needs <NAME>_MONGODB_URI, _MONGODB_DB and _HOLDER (_PARSE_HINT is optional).
 	var users []user
-	for _, p := range []string{"SANGEETH", "SILPA"} {
+	for _, p := range people() {
 		if os.Getenv(p+"_SECRET") != "" {
 			users = append(users, user{strings.ToLower(p), os.Getenv(p + "_SECRET"), mustEnv(p + "_MONGODB_URI"), mustEnv(p + "_MONGODB_DB"), mustEnv(p + "_HOLDER"), os.Getenv(p + "_PARSE_HINT")})
 		}
 	}
 	if len(users) == 0 {
-		log.Fatal("set SANGEETH_SECRET (and SILPA_SECRET) with their MONGODB_URI / MONGODB_DB / HOLDER")
+		log.Fatal("set <NAME>_SECRET (default name ME) with its MONGODB_URI / MONGODB_DB / HOLDER; see .env.example")
 	}
 	seenName, seenKey := map[string]bool{}, map[string]bool{}
 	var tenants []middleware.Tenant
@@ -142,9 +152,6 @@ func build(ctx context.Context, db *mongo.Database, u user, chatLLM, parseLLM *n
 	vendSvc.OnChange = txSvc.Resync
 	emiSvc, err := emis.NewService(ctx, db)
 	check(err)
-	if u.Name == "sangeeth" { // the car-loan statement is his; no one else's database gets it
-		check(emiSvc.SeedCarLoan(ctx))
-	}
 	fundSvc, err := funds.NewService(ctx, db)
 	check(err)
 	stockSvc := stocks.NewService(db, stocks.NewYahoo(yahooURL))
@@ -194,8 +201,18 @@ func build(ctx context.Context, db *mongo.Database, u user, chatLLM, parseLLM *n
 		} else if n > 0 {
 			log.Printf("requeued %d failed messages", n)
 		}
-		for range trigger {
-			pctx, pcancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		retry := time.NewTicker(10 * time.Minute) // transient failures (LLM/DB) get another go without a restart
+		for {
+			select {
+			case <-trigger:
+			case <-retry.C:
+				if n, err := rawSvc.RetryTransient(context.Background()); err != nil {
+					log.Printf("retry transient: %v", err)
+				} else if n > 0 {
+					log.Printf("requeued %d transiently failed messages", n)
+				}
+			}
+			pctx, pcancel := context.WithTimeout(context.Background(), 30*time.Minute)
 			txSvc.ParsePending(pctx)
 			copSvc.Poke()
 			pcancel()
@@ -225,14 +242,6 @@ func build(ctx context.Context, db *mongo.Database, u user, chatLLM, parseLLM *n
 	snapshots.RegisterRoutes(mux, snapshots.NewController(snapSvc), auth)
 	vehicles.RegisterRoutes(mux, vehicles.NewController(vehSvc), auth)
 	purge.RegisterRoutes(mux, purge.NewController(purge.NewService(db, accSvc)), auth)
-	// Grocery & Pantry Tracker. Swiggy sends the browser back to the frontend's callback page after sign-in (exact match, https or localhost).
-	swiggyRedirect := os.Getenv("SWIGGY_REDIRECT_URI")
-	if swiggyRedirect == "" {
-		swiggyRedirect = "http://localhost/callback"
-	}
-	habSvc, err := pantry.Register(ctx, mux, db, swiggyRedirect, auth, chatLLM, txSvc, catSvc)
-	check(err)
-	copSvc.UseHabits(habSvc) // the food-habit nudge reads what the grocery module found
 
 	return mux
 }

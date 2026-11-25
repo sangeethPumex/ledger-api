@@ -35,7 +35,7 @@ var (
 	startRe = regexp.MustCompile(`^\d+ (\d{2} \w{3} \d{4}) (.*)$`)
 	tailRe  = regexp.MustCompile(`^(.*?)\s*(UPI-\d{12})\s+([\d,]+\.\d\d)\s+([\d,]+\.\d\d)\s*$`)
 	refRe   = regexp.MustCompile(`\d{12}`)
-	selfRe  = regexp.MustCompile(`(?i)^SANGEETH`)
+	selfRe  = holderRe("^")
 	openRe  = regexp.MustCompile(`Opening Balance[ -]+([\d,]+\.\d\d)`)
 )
 
@@ -73,7 +73,7 @@ func parse(path string) []row {
 	var rows []row
 	var open []string // narration lines of the row being read
 	var date time.Time
-	skip := []string{"Savings Account", "# Date", "Statement Generated", "SANGEETH PROMOD", "Account No", "Account Statement"}
+	skip := []string{"Savings Account", "# Date", "Statement Generated", strings.ToUpper(os.Getenv("HOLDER_NAME")), "Account No", "Account Statement"}
 scan:
 	for _, l := range strings.Split(body, "\n") {
 		l = strings.TrimSpace(l)
@@ -137,6 +137,23 @@ func classify(r *row) {
 	}
 }
 
+// holderRe matches the account holder's own name (env HOLDER_NAME) in narrations; those rows are moves between own accounts.
+// With no name set it matches nothing.
+func holderRe(prefix string) *regexp.Regexp {
+	h := strings.TrimSpace(os.Getenv("HOLDER_NAME"))
+	if h == "" {
+		return regexp.MustCompile(`a^`)
+	}
+	return regexp.MustCompile("(?i)" + prefix + regexp.QuoteMeta(h))
+}
+
+func envOr(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
+}
+
 func main() {
 	apply := flag.Bool("apply", false, "write to the database (default: dry run)")
 	del := flag.Bool("delete", false, "with -apply, also delete recorded rows the statement does not have")
@@ -156,13 +173,13 @@ func main() {
 	fmt.Printf("parsed %d rows: debits %.2f (%d), credits %.2f (%d)\n", len(rows), float64(dr)/100, dn, float64(cr)/100, cn)
 
 	_ = godotenv.Load(".env")
-	client, err := mongo.Connect(options.Client().ApplyURI(os.Getenv("SANGEETH_MONGODB_URI")))
+	client, err := mongo.Connect(options.Client().ApplyURI(os.Getenv(envOr("IMPORT_USER", "ME") + "_MONGODB_URI")))
 	if err != nil {
 		log.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	db := client.Database(os.Getenv("SANGEETH_MONGODB_DB"))
+	db := client.Database(os.Getenv(envOr("IMPORT_USER", "ME") + "_MONGODB_DB"))
 	txCol, rawCol := db.Collection(transactions.Collection), db.Collection(raw_transactions.Collection)
 
 	vSvc, err := vendors.NewService(ctx, db)

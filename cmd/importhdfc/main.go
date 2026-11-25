@@ -38,7 +38,7 @@ var (
 	contRe  = regexp.MustCompile(`^ {10}(\S.*?)\s*$`)
 	refRe   = regexp.MustCompile(`\d{12}`)
 	upiRe   = regexp.MustCompile(`[A-Za-z0-9._\-]+@[A-Za-z0-9]+`)
-	selfRe  = regexp.MustCompile(`(?i)SANGEETH PROMOD`)
+	selfRe  = holderRe("")
 	openRe  = regexp.MustCompile(`(?s)Opening Balance.*?\n\s*([\d,]+\.\d\d)`)
 )
 
@@ -200,17 +200,34 @@ func classify(r *row) {
 	}
 }
 
+// holderRe matches the account holder's own name (env HOLDER_NAME) in narrations; those rows are moves between own accounts.
+// With no name set it matches nothing.
+func holderRe(prefix string) *regexp.Regexp {
+	h := strings.TrimSpace(os.Getenv("HOLDER_NAME"))
+	if h == "" {
+		return regexp.MustCompile(`a^`)
+	}
+	return regexp.MustCompile("(?i)" + prefix + regexp.QuoteMeta(h))
+}
+
+func envOr(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
+}
+
 func main() {
 	apply := flag.Bool("apply", false, "write to the database (default: dry run)")
 	del := flag.Bool("delete", false, "with -apply, also delete recorded rows the statement does not have")
-	user := flag.String("user", "SANGEETH", "whose database: the prefix of the *_MONGODB_URI / *_MONGODB_DB variables")
+	user := flag.String("user", envOr("IMPORT_USER", "ME"), "whose database: the prefix of the *_MONGODB_URI / *_MONGODB_DB variables")
 	flag.StringVar(&bank, "bank", bank, "bank name as recorded on the account, e.g. \"Federal Bank\"")
 	flag.StringVar(&last4, "last4", last4, "last four digits of the account")
-	self := flag.String("self", "", "regexp for the holder's own name in UPI narrations (those rows are transfers); default: Sangeeth Promod")
+	self := flag.String("self", "", "regexp for the holder's own name in UPI narrations (those rows are transfers); default: HOLDER_NAME from the environment")
 	net := flag.Bool("net", false, "statement is the net-banking PDF layout, not the one from the app")
 	flag.Parse()
 	if flag.NArg() != 1 {
-		log.Fatal("usage: importhdfc [-user SILPA -last4 9991 -self 'SILPA S' -net] [-apply [-delete]] statement.txt")
+		log.Fatal("usage: importhdfc [-user ME -last4 1234 -self 'JANE DOE' -net] [-apply [-delete]] statement.txt")
 	}
 	if *self != "" {
 		selfRe = regexp.MustCompile("(?i)" + *self)
