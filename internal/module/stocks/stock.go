@@ -109,7 +109,7 @@ type Position struct {
 	DayPct     float64   `json:"dayPct"`
 	Allocation float64   `json:"allocation"` // share of total value, 0..1
 	Lots       []LotView `json:"lots"`
-	Stale      bool      `json:"stale"` // priced from cache because the live fetch failed
+	Stale      bool      `json:"stale"` // priced from a saved quote that is due for a refresh
 }
 
 type Summary struct {

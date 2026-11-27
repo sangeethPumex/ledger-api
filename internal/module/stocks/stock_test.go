@@ -2,6 +2,7 @@ package stocks
 
 import (
 	"math"
+	"slices"
 	"testing"
 	"time"
 
@@ -69,5 +70,16 @@ func TestValidate(t *testing.T) {
 		if bad.Validate(now) == "" {
 			t.Errorf("%s accepted", name)
 		}
+	}
+}
+
+func TestOutdated(t *testing.T) {
+	fresh := time.Now()
+	ok := Quote{Name: "A", DomainTried: true, FetchedAt: fresh.Add(time.Minute)}
+	old, unnamed := ok, ok
+	old.FetchedAt, unnamed.Name = fresh.Add(-time.Minute), ""
+	missing, stale := outdated([]string{"OK", "OLD", "UNNAMED", "NEW"}, map[string]Quote{"OK": ok, "OLD": old, "UNNAMED": unnamed}, fresh)
+	if !slices.Equal(missing, []string{"NEW"}) || !slices.Equal(stale, []string{"OLD", "UNNAMED"}) {
+		t.Errorf("missing %v stale %v", missing, stale)
 	}
 }

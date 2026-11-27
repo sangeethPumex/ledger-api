@@ -35,6 +35,7 @@ type Service struct {
 	model      string
 	Holder     string // name on this user's bank accounts, put into the parse prompt
 	ParseHint  string // optional extra parse rules for this user
+	OnInsert   func() // runs after a parsed message becomes a transaction; may be nil
 }
 
 func NewService(ctx context.Context, db *mongo.Database, raw *raw_transactions.Service, v *vendors.Service, c *categories.Service, acc *accounts.Service, cd *cards.Service, llm Chatter, model string) (*Service, error) {
@@ -86,11 +87,23 @@ func (s *Service) Parse(ctx context.Context, rawID bson.ObjectID) error {
 	for i, c := range cats {
 		names[i] = c.Name
 	}
-	reply, err := s.llm.Chat(ctx, systemPrompt(names, s.Holder, s.ParseHint), raw.Message)
-	if err != nil {
-		return fail("llm_error", err)
+	// Known bank formats are read in code; only the rest cost an LLM call and wait for its pacing.
+	var (
+		e     *extraction
+		paise int64
+		at    time.Time
+	)
+	model, version := "rules", rulesVersion
+	if m := matchRules(raw.Message, s.Holder, s.ParseHint); m != nil {
+		e, paise, at, err = checkExtraction(m, raw.Message, raw.ReceivedAt)
+	} else {
+		model, version = s.model, PromptVersion
+		reply, cerr := s.llm.Chat(ctx, systemPrompt(names, s.Holder, s.ParseHint), raw.Message)
+		if cerr != nil {
+			return fail("llm_error", cerr)
+		}
+		e, paise, at, err = parseExtraction(reply, raw.Message, raw.ReceivedAt)
 	}
-	e, paise, at, err := parseExtraction(reply, raw.Message, raw.ReceivedAt)
 	if err != nil {
 		return fail("invalid_extraction", err)
 	}
@@ -112,7 +125,7 @@ func (s *Service) Parse(ctx context.Context, rawID bson.ObjectID) error {
 		ID: bson.NewObjectID(), RawID: rawID, Type: e.Type, AmountPaise: paise, OccurredAt: at, ReceivedAt: raw.ReceivedAt,
 		Bank: e.Bank, Direction: e.Direction, AccountLast4: e.AccountLast4, Ref: e.Ref,
 		RawVendor: e.RawVendor, UPIID: strings.ToLower(e.UPIID),
-		Model: s.model, PromptVersion: PromptVersion, CreatedAt: time.Now().UTC(),
+		Model: model, PromptVersion: version, CreatedAt: time.Now().UTC(),
 	}
 	v, err := s.vendors.Match(ctx, e.RawVendor, e.RawVendor, t.UPIID, raw.Message)
 	if err != nil {
@@ -155,6 +168,9 @@ func (s *Service) Parse(ctx context.Context, rawID bson.ObjectID) error {
 	}
 	if _, err := s.col.InsertOne(ctx, t); err != nil && !mongo.IsDuplicateKeyError(err) {
 		return fail("db_error", err)
+	}
+	if s.OnInsert != nil {
+		s.OnInsert()
 	}
 	return s.raw.SetStatus(ctx, rawID, raw_transactions.StatusParsed, "")
 }

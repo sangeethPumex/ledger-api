@@ -3,6 +3,7 @@ package stocks
 import (
 	"context"
 	"log"
+	"sync/atomic"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -14,6 +15,9 @@ type Service struct {
 	col    *mongo.Collection
 	quotes *mongo.Collection
 	prices PriceProvider
+	// OnRefresh, when set, runs after new quotes are saved.
+	OnRefresh  func()
+	refreshing atomic.Bool // one background refresh at a time
 }
 
 func NewService(db *mongo.Database, prices PriceProvider) *Service {
@@ -30,9 +34,39 @@ func (s *Service) Lots(ctx context.Context) ([]Lot, error) {
 	return out, cur.All(ctx, &out)
 }
 
-// Quotes prices the symbols. Only missing or stale ones hit the provider, in one batch; if it fails,
-// the last cached quote is used (its FetchedAt then predates freshAt(now)) instead of returning an error.
+// Quotes prices the symbols. Only missing or stale ones hit the provider, in one batch, and the call waits for it; if it
+// fails, the last cached quote is used (its FetchedAt then predates freshAt(now)) instead of returning an error.
 func (s *Service) Quotes(ctx context.Context, symbols []string, now time.Time) (map[string]Quote, error) {
+	quotes, err := s.cached(ctx, symbols)
+	if err != nil {
+		return nil, err
+	}
+	missing, stale := outdated(symbols, quotes, freshAt(now))
+	s.fetch(ctx, append(missing, stale...), quotes)
+	return quotes, nil
+}
+
+// quotesNow is Quotes for a page load: saved quotes are returned at once and the stale ones are refreshed in the
+// background. Only a symbol that has never been priced is waited for, as there is nothing to show for it.
+func (s *Service) quotesNow(ctx context.Context, symbols []string, now time.Time) (map[string]Quote, error) {
+	quotes, err := s.cached(ctx, symbols)
+	if err != nil {
+		return nil, err
+	}
+	missing, stale := outdated(symbols, quotes, freshAt(now))
+	s.fetch(ctx, missing, quotes)
+	if len(stale) > 0 && s.refreshing.CompareAndSwap(false, true) {
+		go func() {
+			defer s.refreshing.Store(false)
+			bg, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			s.fetch(bg, stale, map[string]Quote{})
+		}()
+	}
+	return quotes, nil
+}
+
+func (s *Service) cached(ctx context.Context, symbols []string) (map[string]Quote, error) {
 	quotes := map[string]Quote{}
 	if len(symbols) == 0 {
 		return quotes, nil
@@ -41,37 +75,59 @@ func (s *Service) Quotes(ctx context.Context, symbols []string, now time.Time) (
 	if err != nil {
 		return nil, err
 	}
-	var cached []Quote
-	if err := cur.All(ctx, &cached); err != nil {
+	var saved []Quote
+	if err := cur.All(ctx, &saved); err != nil {
 		return nil, err
 	}
-	fresh := freshAt(now)
-	for _, q := range cached {
+	for _, q := range saved {
 		quotes[q.Symbol] = q
-	}
-	var need []string
-	for _, sym := range symbols {
-		if q, ok := quotes[sym]; !ok || q.Name == "" || !q.DomainTried || q.FetchedAt.Before(fresh) {
-			need = append(need, sym)
-		}
-	}
-	if len(need) > 0 {
-		got, err := s.prices.Quotes(ctx, need)
-		if err != nil {
-			log.Printf("quotes: %v (serving cache)", err)
-		}
-		for sym, q := range got {
-			quotes[sym] = q
-			if _, err := s.quotes.ReplaceOne(ctx, bson.M{"_id": sym}, q, options.Replace().SetUpsert(true)); err != nil {
-				log.Printf("quote save %s: %v", sym, err)
-			}
-		}
 	}
 	return quotes, nil
 }
 
-// Portfolio values every lot.
+// outdated splits the symbols that need the provider: missing have no saved quote, stale have one that is old or incomplete.
+func outdated(symbols []string, quotes map[string]Quote, fresh time.Time) (missing, stale []string) {
+	for _, sym := range symbols {
+		if q, ok := quotes[sym]; !ok {
+			missing = append(missing, sym)
+		} else if q.Name == "" || !q.DomainTried || q.FetchedAt.Before(fresh) {
+			stale = append(stale, sym)
+		}
+	}
+	return missing, stale
+}
+
+// fetch prices need from the provider, saves what comes back and puts it into quotes.
+func (s *Service) fetch(ctx context.Context, need []string, quotes map[string]Quote) {
+	if len(need) == 0 {
+		return
+	}
+	got, err := s.prices.Quotes(ctx, need)
+	if err != nil {
+		log.Printf("quotes: %v (serving cache)", err)
+	}
+	for sym, q := range got {
+		quotes[sym] = q
+		if _, err := s.quotes.ReplaceOne(ctx, bson.M{"_id": sym}, q, options.Replace().SetUpsert(true)); err != nil {
+			log.Printf("quote save %s: %v", sym, err)
+		}
+	}
+	if len(got) > 0 && s.OnRefresh != nil {
+		s.OnRefresh()
+	}
+}
+
+// Portfolio values every lot at the saved prices, refreshing old ones in the background; Summary.Stale says some are old.
 func (s *Service) Portfolio(ctx context.Context, now time.Time) (*Portfolio, error) {
+	return s.value(ctx, now, s.quotesNow)
+}
+
+// LivePortfolio is Portfolio after waiting for current prices, for background jobs that record them.
+func (s *Service) LivePortfolio(ctx context.Context, now time.Time) (*Portfolio, error) {
+	return s.value(ctx, now, s.Quotes)
+}
+
+func (s *Service) value(ctx context.Context, now time.Time, price func(context.Context, []string, time.Time) (map[string]Quote, error)) (*Portfolio, error) {
 	lots, err := s.Lots(ctx)
 	if err != nil {
 		return nil, err
@@ -83,7 +139,7 @@ func (s *Service) Portfolio(ctx context.Context, now time.Time) (*Portfolio, err
 			symbols = append(symbols, l.Symbol)
 		}
 	}
-	quotes, err := s.Quotes(ctx, symbols, now)
+	quotes, err := price(ctx, symbols, now)
 	if err != nil {
 		return nil, err
 	}

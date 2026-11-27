@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,6 +27,15 @@ type Client struct {
 
 // defaultGap queues Chat calls at 10 requests/minute, under typical free-tier limits.
 const defaultGap = 6 * time.Second
+
+// GapFromEnv reads a MinGap in seconds (decimals allowed) from env var k. It returns 0, meaning the default, when unset or invalid.
+func GapFromEnv(k string) time.Duration {
+	s, err := strconv.ParseFloat(os.Getenv(k), 64)
+	if err != nil || !(s > 0 && s <= 3600) {
+		return 0
+	}
+	return time.Duration(s * float64(time.Second))
+}
 
 // pace blocks until this call's slot; calls are spaced minGap apart.
 func (c *Client) pace(ctx context.Context) error {

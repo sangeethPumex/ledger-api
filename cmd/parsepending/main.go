@@ -50,6 +50,7 @@ func main() {
 	_ = godotenv.Load(".env")
 	model := os.Getenv("GEMINI_MODEL")
 	llm := nim.New("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", os.Getenv("GEMINI_API_KEY"), model)
+	llm.MinGap = nim.GapFromEnv("GEMINI_MIN_GAP_SECONDS")
 	ctx := context.Background()
 	for _, p := range strings.Split(strings.ToUpper(os.Getenv("PEOPLE")+",ME"), ",") {
 		p = strings.TrimSpace(p)

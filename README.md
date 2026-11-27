@@ -83,6 +83,7 @@ The names come from `PEOPLE` (comma-separated, default `ME`). A person is switch
 | Variable | Required | Meaning |
 |---|---|---|
 | `PORT` | yes | HTTP port (the Dockerfile exposes 8081) |
+| `GEMINI_MIN_GAP_SECONDS` | no | Spacing between Gemini parse calls (default 6, decimals allowed). Lower it only if your Gemini rate limit allows |
 | `KRUTRIM_API_KEY` | no | parse messages with Krutrim (OpenAI-style) instead of Gemini; `KRUTRIM_MODEL` (default `Meta-Llama-3.3-70B-Instruct`) and `KRUTRIM_MIN_GAP_SECONDS` (default 6) tune it |
 | `GEMINI_API_KEY`, `GEMINI_MODEL` | yes | LLM used to parse messages into transactions and for dashboard chat |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | for push | Generate with `go run ./cmd/vapidgen` |
@@ -144,6 +145,10 @@ Routes are registered in each module's `RegisterRoutes`, so that is the source o
 | Reminder / push check | every 30 s |
 | Vehicle paper reminders | hourly |
 | Delete raw messages older than 5 days | hourly (transactions stay) |
+
+## SMS parsing
+
+Messages in a known format (Federal, HDFC, Union and Kotak UPI alerts) are read by the rules in [`internal/module/transactions/rules.go`](internal/module/transactions/rules.go), with no LLM call. Everything else goes to the LLM, as do payees a format alone cannot classify (card bills, loans, pay later, names close to the holder's) and every message of a person with a `_PARSE_HINT`. Rule-read transactions have `model: "rules"` and no suggested category.
 
 ## Docker
 

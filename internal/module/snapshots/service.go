@@ -214,7 +214,7 @@ func (s *Service) live(ctx context.Context, now time.Time) (*Snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	port, err := s.stocks.Portfolio(ctx, now)
+	port, err := s.stocks.LivePortfolio(ctx, now)
 	if err != nil {
 		return nil, err
 	}

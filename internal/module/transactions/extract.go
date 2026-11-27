@@ -90,8 +90,13 @@ func parseExtraction(reply, message string, receivedAt time.Time) (*extraction, 
 	if err := json.Unmarshal([]byte(reply[i:j+1]), &e); err != nil {
 		return nil, 0, time.Time{}, err
 	}
+	return checkExtraction(&e, message, receivedAt)
+}
+
+// checkExtraction validates and normalises what a rule or the model read from message.
+func checkExtraction(e *extraction, message string, receivedAt time.Time) (*extraction, int64, time.Time, error) {
 	if !e.IsTransaction {
-		return &e, 0, time.Time{}, nil
+		return e, 0, time.Time{}, nil
 	}
 	if !validTypes[e.Type] {
 		// Smaller models invent types ("investments"); the direction still tells expense from income.
@@ -124,7 +129,7 @@ func parseExtraction(reply, message string, receivedAt time.Time) (*extraction, 
 			break
 		}
 	}
-	return &e, paise, at, nil
+	return e, paise, at, nil
 }
 
 // toPaise converts a decimal rupee string to paise without floats.

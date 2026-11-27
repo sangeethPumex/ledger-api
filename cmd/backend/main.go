@@ -5,7 +5,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -81,14 +80,16 @@ func main() {
 	defer cancel()
 
 	// Gemini (OpenAI-compatible endpoint) does both jobs: parsing messages into transactions and the dashboard chat.
-	chatLLM := nim.New("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", mustEnv("GEMINI_API_KEY"), model)
-	// Message parsing runs on Krutrim when KRUTRIM_API_KEY is set, with its own pacing so it neither throttles nor starves the chat.
-	parseLLM := chatLLM
+	// Each job has its own client, so a parsing backlog never makes the chat side wait for a pacing slot.
+	const geminiURL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+	key := mustEnv("GEMINI_API_KEY")
+	chatLLM := nim.New(geminiURL, key, model)
+	parseLLM := nim.New(geminiURL, key, model)
+	parseLLM.MinGap = nim.GapFromEnv("GEMINI_MIN_GAP_SECONDS")
+	// Message parsing runs on Krutrim instead when KRUTRIM_API_KEY is set.
 	if k := os.Getenv("KRUTRIM_API_KEY"); k != "" {
 		parseLLM = nim.New("https://cloud.olakrutrim.com/v1/chat/completions", k, envOr("KRUTRIM_MODEL", "Meta-Llama-3.3-70B-Instruct"))
-		if g, err := strconv.Atoi(os.Getenv("KRUTRIM_MIN_GAP_SECONDS")); err == nil && g > 0 {
-			parseLLM.MinGap = time.Duration(g) * time.Second
-		}
+		parseLLM.MinGap = nim.GapFromEnv("KRUTRIM_MIN_GAP_SECONDS")
 	}
 	yahooURL := os.Getenv("YAHOO_CHART_URL")
 	if yahooURL == "" {
@@ -136,7 +137,10 @@ type user struct{ Name, APISecret, MongoURI, DB, Holder, ParseHint string }
 
 // build wires every module over one user's database and returns their API.
 func build(ctx context.Context, db *mongo.Database, u user, chatLLM, parseLLM *nim.Client, store *vehicles.Store, yahooURL string) http.Handler {
-	auth := middleware.APIKey(u.APISecret)
+	// The slowest pages answer from memory for a short while. Any write through the API or a newly parsed transaction empties it.
+	cache := middleware.NewCache(45*time.Second, "/dashboard", "/dashboard/daily", "/dashboard/networth", "/insights", "/insights/patterns")
+	apiKey := middleware.APIKey(u.APISecret)
+	auth := func(h http.Handler) http.Handler { return apiKey(cache.Wrap(h)) } // the key is checked before the cache is read
 	rawSvc := raw_transactions.NewService(db)
 	catSvc, err := categories.NewService(ctx, db)
 	check(err)
@@ -149,12 +153,14 @@ func build(ctx context.Context, db *mongo.Database, u user, chatLLM, parseLLM *n
 	txSvc, err := transactions.NewService(ctx, db, rawSvc, vendSvc, catSvc, accSvc, cardSvc, parseLLM, parseLLM.Model)
 	check(err)
 	txSvc.Holder, txSvc.ParseHint = u.Holder, u.ParseHint
+	txSvc.OnInsert = cache.Clear
 	vendSvc.OnChange = txSvc.Resync
 	emiSvc, err := emis.NewService(ctx, db)
 	check(err)
 	fundSvc, err := funds.NewService(ctx, db)
 	check(err)
 	stockSvc := stocks.NewService(db, stocks.NewYahoo(yahooURL))
+	stockSvc.OnRefresh = cache.Clear
 	alertSvc, err := alerts.NewService(ctx, db, stockSvc, fundSvc)
 	check(err)
 	go alertSvc.Run(context.Background(), 5*time.Minute)
