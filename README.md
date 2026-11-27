@@ -6,7 +6,7 @@
 
 <p align="center">
   The Go API behind Catalyst, a personal finance app: accounts, cards, transactions, EMIs, investments, budgets, a vehicle garage and an AI copilot.
-</p>
+</p>.
 
 ---
 
